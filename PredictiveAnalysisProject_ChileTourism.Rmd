@@ -1,0 +1,3534 @@
+---
+title: "Predictive Analysis Tourism Project"
+author: "Bincy Babu"
+date: '2023-10-16'
+output: pdf_document
+---
+### Loading packages and data
+```{r}
+# Loading the necessary packages
+
+pckg <- c("forecast", "tsutils", "glmnet")
+for (i in 1:length(pckg)){
+if(!(pckg[i] %in% rownames(installed.packages()))){
+install.packages(pckg[i])
+}
+library(pckg[i],character.only = TRUE)
+}
+```
+```{r}
+load("C:/Users/SKOVDE/Sem III/Predictive Analysis/Assignment/Project/dataTour.Rdata")
+
+# Filtering data only for the destination country Chile.
+data_ch <- dataTour$Chile
+
+# Removing year 2020, which is not needed for the analysis
+data_ch <- window(data_ch, frequency=4, start=c(1998, 1), end=c(2019, 4))
+data_ch
+
+```
+### Forecasting tourism flow from Argentina to Chile
+
+```{r}
+
+# Getting the values for the origin Chile.
+data_ar_ch <- data_ch[,1]
+print(data_ar_ch)
+```
+## #### Creating Train and Test Data
+```{r}
+# Taking year 2019 data as the test data
+data_ar_ch.tst <- window(data_ar_ch, frequency=4, start=c(2019, 1))
+print('Test Data')
+print(data_ar_ch.tst)
+
+# Rest of the data is taken as training data
+data_ar_ch.trn <- window(data_ar_ch, frequency=4, end=c(2018, 4))
+print('Training Data')
+print(data_ar_ch.trn)
+```
+#### Exploring the time series
+```{r}
+plot(data_ar_ch, ylab="Toursim flow from Argentina to Chile")
+```
+
+Here, I am going to calculate Central Moving Average and plot it
+```{r}
+cma_ar_ch <- cmav(data_ar_ch.trn, outplot=1)
+title(main="Tourism flow from Argentina to Chile")
+```
+Now, I am going to plot the seasonal plot.
+```{r}
+# Plotting the seasonal plot
+seasplot(data_ar_ch.trn)
+
+# Plotting the seasonal boxplot
+seasplot(data_ar_ch.trn, outplot=2)
+
+# Plotting the seasonal subseries plot
+seasplot(data_ar_ch.trn,outplot=3)
+```
+
+
+Results of statistical testing
+Evidence of trend: TRUE  (pval: 0)
+Evidence of seasonality: TRUE  (pval: 0)
+
+
+
+From the plots, we can see model has both trend and multiplicative seasonality. Now, I am going to decompose the time series.
+```{r}
+# Decomposing the time series
+dc_ar_ch <- decomp(data_ar_ch.trn,outplot=1)
+
+```
+
+```{r}
+# Load necessary libraries
+library(ggplot2)
+
+# Apply additive decomposition
+decomp_additive <- decompose(data_ar_ch, type = "additive")
+
+# Apply multiplicative decomposition
+decomp_multiplicative <- decompose(data_ar_ch, type = "multiplicative")
+
+# Plot the decomposed components
+par(mfrow = c(3, 3))  # Set up a 3x3 grid for the plots
+
+# Original time series
+plot(data_ar_ch, main = "Original Time Series", col = "blue")
+
+# Additive decomposition components
+plot(decomp_additive$trend, main = "Additive Trend", col = "red")
+plot(decomp_additive$seasonal, main = "Additive Seasonal", col = "green")
+plot(decomp_additive$random, main = "Additive Residuals", col = "purple")
+
+# Multiplicative decomposition components
+plot(decomp_multiplicative$trend, main = "Multiplicative Trend", col = "red")
+plot(decomp_multiplicative$seasonal, main = "Multiplicative Seasonal", col = "green")
+plot(decomp_multiplicative$random, main = "Multiplicative Residuals", col = "purple")
+
+# Reset the plotting layout
+par(mfrow = c(1, 1))
+```
+
+
+
+#### Building the Model using Exponential Smoothing
+
+Initially, I am going to forecast the timeseries using information criteria without explicitly specifying ETS model.
+
+
+```{r}
+fit_ar_ch <- ets(data_ar_ch.trn)
+fit_ar_ch
+
+```
+Here, we can see ETS(M,N,M) is chosen as the best model. Now, I am going to construct the forecasting model by preselecting the exponential smoothing type. Since, there is trend and seasonality, I am going to build ETS(M,Ad,M), ETS(M,M,M) and ETS(M,Md,M)
+```{r}
+fit1_ar_ch <- ets(data_ar_ch.trn, model="MAM", damped=TRUE)
+fit2_ar_ch <- ets(data_ar_ch.trn, model="MMM", damped=FALSE)
+fit3_ar_ch <- ets(data_ar_ch.trn, model="MMM", damped=TRUE)
+```
+
+Now, I am going to get the ETS model with best AICc.
+```{r}
+aicc <- c(fit_ar_ch$aicc,fit1_ar_ch$aicc, fit2_ar_ch$aicc, fit3_ar_ch$aicc)
+names(aicc) <- c("MNM","MAdM","MMM","MMdM")
+aicc
+
+```
+```{r}
+which.min(aicc)
+```
+We can see that the first model where smoothing type is selected automatically gives the best AICc. Now, I am going to forecast these fours models and Naive model.
+#### Forecasting the time series
+
+Here, I am going to forecast the fours models we build and the Naive model. Since the test set is only for one year, I am going to do single origin evaluation.
+```{r}
+# Forecast period is defined as 4, since we are forecasting for the next 4 quarters of 2019
+h <- 4
+
+# Forcasting all the models
+frc_mnm_arch <- forecast(fit_ar_ch, h=h)
+frc_mAdm_arch <- forecast(fit1_ar_ch, h=h)
+frc_mmm_arch <- forecast(fit2_ar_ch, h=h)
+frc_mMdm_arch <- forecast(fit3_ar_ch, h=h)
+
+# And the naive:
+frc_naive_arch <- tail(data_ar_ch.trn, frequency(data_ar_ch.trn))[1:h] # that is copy the last season
+
+```
+Now, I am plotting forecasts of all the models below.
+```{r}
+plot(frc_mnm_arch)
+plot(frc_mAdm_arch)
+plot(frc_mmm_arch)
+plot(frc_mMdm_arch)
+plot(frc_naive_arch)
+
+```
+Now, I am going to evaluate the forecasts using Mean Absolute Error (MAE) and Mean Absolute Percentage Error (MAPE). Since our forecast horizon is 4, I am going to take first 4 observations from the test set.
+```{r}
+
+MAE_ets_MNM <- mean(abs(data_ar_ch.tst[1:h] - frc_mnm_arch$mean))
+MAE_ets_MAdM <- mean(abs(data_ar_ch.tst[1:h] - frc_mAdm_arch$mean))
+MAE_ets_MMM <- mean(abs(data_ar_ch.tst[1:h] - frc_mmm_arch$mean))
+MAE_ets_MMdM <- mean(abs(data_ar_ch.tst[1:h] - frc_mMdm_arch$mean))
+MAE_ets_Naive <- mean(abs(data_ar_ch.tst[1:h] - frc_naive_arch))
+
+MAE_ar_ch <- c(MAE_ets_MNM, MAE_ets_MAdM, MAE_ets_MMM, MAE_ets_MMdM, MAE_ets_Naive) # Collect them in a single vector
+
+names(MAE_ar_ch) <- c("MNM","MAdM","MMM","MMdM","Naive")
+round(MAE_ar_ch, 3) # round to 3rd decimal point
+
+```
+```{r}
+which.min(MAE_ar_ch)
+```
+```{r}
+MAPE_ets_MNM <- mean(abs((data_ar_ch.tst[1:h] - frc_mnm_arch$mean)/data_ar_ch.tst[1:h]))
+MAPE_ets_MAdm <- mean(abs((data_ar_ch.tst[1:h] - frc_mAdm_arch$mean)/data_ar_ch.tst[1:h]))
+MAPE_ets_MMM <- mean(abs((data_ar_ch.tst[1:h] - frc_mmm_arch$mean)/data_ar_ch.tst[1:h]))
+MAPE_ets_MMdM <- mean(abs((data_ar_ch.tst[1:h] - frc_mMdm_arch$mean)/data_ar_ch.tst[1:h]))
+MAPE_ets_Naive <- mean(abs((data_ar_ch.tst[1:h] - frc_naive_arch)/data_ar_ch.tst[1:h]))
+
+MAPE_ar_ch <- c(MAPE_ets_MNM, MAPE_ets_MAdm, MAPE_ets_MMM, MAPE_ets_MMdM, MAPE_ets_Naive) # Collect them in a single vector
+
+names(MAPE_ar_ch) <- c("MAM","MAdM","MMM","MMdM","Naive")
+round(MAPE_ar_ch, 3) # round to 3rd decimal point
+```
+```{r}
+which.min(MAPE_ar_ch)
+```
+According to MAE and MAPE, 4th model which uses MMdM produces the best forecast with least error
+```{r}
+frc_ets_ar_ch <- frc_mMdm_arch$mean
+MAPE_ets_ar_ch <- MAPE_ets_MMdM
+```
+#### Building the Model using OLS
+
+Initially, I am going to plot training data
+```{r}
+plot(data_ar_ch.trn)
+```
+
+```{r}
+decomposed <- decompose(data_ar_ch.trn)
+```
+```{r}
+plot(decomposed$seasonal, main = "Seasonal Component")
+```
+
+
+
+
+
+We can see that the data has multiplicative seasonality. It is not good for the regression modelling. So, I am going to convert the data in logarithms and do the regression.
+```{r}
+data_ar_ch.trn_log <- log(data_ar_ch.trn)
+plot(data_ar_ch.trn_log)
+
+```
+Now, the seasonality becomes additive. Now, I am going to build the OLS model using lags. So, I am going to find the lag-structure of the time series. I am doing this by using both PACF (Partial AutoCorrelation Function).
+```{r}
+pacf(log(data_ar_ch.trn_log))
+
+```
+#### According to PACF, we can see that the lags 1, 2, 3, 4, 5 and 7 are significant which may be helpful inputs for a regression model. Now, I am going to construct lags. Initially, I am going to get total number of observations in the training set.
+```{r}
+n <- length(data_ar_ch.trn_log)
+n
+
+```
+### I am going to create regression with 7 lags. For this, I am going to create an array with NA (Non-Arithmetic) values having n rows and 8 columns. One column is for the target and all other 7 columns for the lags.
+```{r}
+X_ar_ch <- array(NA, c(n, 8))
+
+for (i in 1:8){
+X_ar_ch[i:n,i] <- log(data_ar_ch.trn_log)[1:(n-i+1)]
+}
+
+# Name the columns
+colnames(X_ar_ch) <- c("Argentina", paste0("lag",1:7))
+
+X_ar_ch[1:10,]
+```
+Now, I am getting the last 10 rows.
+```{r}
+X_ar_ch[(n-9):n,]
+
+```
+```{r}
+X_ar_ch <- as.data.frame(X_ar_ch)
+plot(X_ar_ch)
+```
+We can see from the scatter plot that it looks linear. Now, I am going to do regression using the complete model and the stepwise selection.
+```{r}
+# The complete model
+summary(lm(Argentina ~., data=X_ar_ch))
+
+```
+## We can see only lag4 looks significant. Now, I am going to do regression using stepwise. But, it will throw error because of the NA values. We have to resolve this issue before running the stepwise model.
+```{r}
+# Find NA in X
+idx <- is.na(X_ar_ch)
+# The result is logical TRUE/FALSE values
+idx[1:10,]
+
+```
+```{r}
+# Finding NA value count in each row.
+idx <- rowSums(idx)
+
+# Getting the row indexes which does not contains any NA values.
+idx <- idx == 0
+idx
+```
+
+Now, I am going to build the stepwise regression model after removing the redundant data.
+
+```{r}
+# The stepwise model
+fit_temp <- lm(Argentina~., data=X_ar_ch[idx,])
+
+fit5_ar_ch <- step(fit_temp)
+
+```
+The stepwise model suggests lags 1, 4 and 5  as significant. Now, I am going to do forecasting the model using the test set. I am going to forecast for the period from t + 1 to t+4.
+```{r}
+frc5_ar_ch <- array(NA,c(4,1))
+for (i in 1:4){
+# For the Xnew we use the last 7 observations as before
+Xnew <- tail(data_ar_ch.trn, 7)
+# Add to that the forecasted values
+Xnew <- c(Xnew, frc5_ar_ch)
+
+# Take the relevant 7 values. The index i helps us to get the right ones
+Xnew <- Xnew[i:(6+i)]
+# If i = 1 then this becomes Xnew[1:7].
+# If i = 2 then this becomes Xnew[2:8] - just as the example above.
+# Reverse the order
+Xnew <- Xnew[7:1]
+# Make Xnew an array and name the inputs
+Xnew <- array(Xnew, c(1,7)) # c(1,7) are the dimensions of the array
+colnames(Xnew) <- paste0("lag",1:7) # I have already reversed the order
+# Convert to data.frame
+Xnew <- as.data.frame(Xnew)
+# Forecast
+frc5_ar_ch[i] <- predict(fit5_ar_ch, Xnew)
+}
+frc5_ar_ch
+
+```
+Now, I am going to forecast using dummy variables, since there is seasonality for the data.
+```{r}
+length(data_ar_ch.trn)/4
+
+```
+Since the training data has 21 years, I am creating dummy variables for 21 years for each quarters.
+```{r}
+D <- rep(1:4, 21) # Replicate 1:4 21 times
+D <- factor(D)
+factor(rep(c("Q1","Q2","Q3","Q4"), 21))
+
+```
+Now, I am going to bind the dummies with the lags in X.
+
+
+```{r}
+D <- rep(1:4, length.out = nrow(X_ar_ch))
+
+# Bind the dummies with the lags in X_ch_ar
+X2_ar_ch <- cbind(X_ar_ch, D)
+colnames(X2_ar_ch) <- c(colnames(X_ar_ch)[1:8], "D")
+X2_ar_ch
+```
+Now, I am going to build the regression using all the seven lags.
+```{r}
+summary(lm(Argentina ~.,data=X2_ar_ch))
+```
+## We can see  lag1, lag4, and lag5 have very low p-values (6.78e-07, 1.23e-06, 8.70e-08), indicating that they are likely to be statistically significant.lag2, lag3, lag6, and lag7 have higher p-values, suggesting that their coefficients may not be significantly different from zero. Now, I am going to do regression using stepwise. But, it will throw error because of the NA values. We have to resolve this issue before running the stepwise model.
+```{r}
+# Find NA in X2
+idx <- is.na(X2_ar_ch)
+# The result is logical TRUE/FALSE values
+idx[1:10,]
+
+```
+```{r}
+# Finding NA value count in each row.
+idx <- rowSums(idx)
+
+# Getting the row indexes which does not contains any NA values.
+idx <- idx == 0
+idx
+```
+Now, I am going to build the stepwise regression model after removing the redundant data.
+# The stepwise model
+```{r}
+fit_temp <- lm(Argentina~., data=X2_ar_ch[idx,])
+
+fit6_ar_ch <- step(fit_temp)
+
+
+```
+We can see that the model got lag1, lag3, lag4, lag5,lag6 and the dummies. Now, I am going to compare the AIC of this model with the Autoregressive OLS model we got before.
+```{r}
+c(AIC(fit5_ar_ch), AIC(fit6_ar_ch))
+
+```
+```{r}
+fit6_ar_ch
+```
+
+
+
+
+## We can see that the model using the dummy variable not performs best. Now, I am going to forecast the model using the out-sample data. I am going to forecast for the period from t + 1 to t+4.
+
+```{r}
+frc6_ar_ch <- numeric(4)  # Initialize the forecast vector
+
+for (i in 1:4) {
+  # For Xnew, use the last 7 observations as before
+  Xnew <- tail(data_ar_ch.trn, 7)
+  
+  # Take the relevant 7 values. The index i helps us to get the right ones
+  Xnew <- Xnew[i:(6 + i)]
+  
+  # Remove NAs from lag variables
+  Xnew <- na.omit(Xnew)
+  
+  # Reverse the order of Xnew to match the order of lag variables
+  Xnew <- rev(Xnew)
+  
+  # Make Xnew an array and name the inputs
+  Xnew <- array(Xnew, c(1, 7))
+  colnames(Xnew) <- paste0("lag", 1:7)
+  
+  # Create the value of the dummy
+  D <- i
+  Xnew <- cbind(Xnew, D)
+  
+  # Convert to data.frame
+  Xnew <- as.data.frame(Xnew)
+  
+  # Print Xnew to investigate
+  print(Xnew)
+  
+  # Forecast
+  frc6_ar_ch[i] <- predict(fit6_ar_ch, newdata = Xnew)
+}
+
+frc6_ar_ch
+
+
+```
+```{r}
+frc6_ch_ar <- numeric(4)  # Initialize the forecast vector
+
+for (i in 1:4) {
+  # For Xnew, use the last 7 observations as before
+  Xnew <- tail(data_ch_ar.trn, 7)
+  
+  # Take the relevant 7 values. The index i helps us to get the right ones
+  Xnew <- Xnew[i:(6 + i)]
+  
+  # Remove NAs from lag variables
+  Xnew <- na.omit(Xnew)
+  
+  # Reverse the order of Xnew to match the order of lag variables
+  Xnew <- rev(Xnew)
+  
+  # Make Xnew an array and name the inputs
+  Xnew <- array(Xnew, c(1, 7))
+  colnames(Xnew) <- paste0("lag", 1:7)
+  
+  # Create the value of the dummy
+  D <- i
+  Xnew <- cbind(Xnew, D)
+  
+  # Convert to data.frame
+  Xnew <- as.data.frame(Xnew)
+  
+  # Print Xnew to investigate
+  print(Xnew)
+  
+  # Forecast
+  frc6_ch_ar[i] <- predict(fit6_ch_ar, newdata = Xnew)
+}
+
+frc6_ch_ar
+
+```
+
+Now, I am going to model in differences. Initially, I am going to retain the data without lags
+```{r}
+X3_ar_ch <- X_ar_ch
+```
+
+Now, I am going to calculate differences for each column.
+```{r}
+# The function ncol() counts how many columns
+for (i in 1:ncol(X3_ar_ch)){
+X3_ar_ch[,i] <- c(NA,diff(X3_ar_ch[,i]))
+}
+
+print(X3_ar_ch)
+```
+Now, I am going to build the regression using all the 7 lags
+```{r}
+summary(lm(Argentina ~., data=X3_ar_ch))
+
+```
+We can see that only lag 1,4 and 7 looks significant. Now, I am going to do stepwise regression model. But, it will throw error because of the NA values. We have to resolve this issue before running the stepwise model.
+```{r}
+idx <- is.na(X3_ar_ch)
+idx[1:10,]
+
+```
+
+```{r}
+# Finding NA value count in each row.
+idx <- rowSums(idx)
+
+# Getting the row indexes which does not contains any NA values.
+idx <- idx == 0
+idx
+```
+Now, I am going to build the stepwise regression model after removing the redundant data.
+```{r}
+# The stepwise model
+fit_temp <- lm(Argentina~., data=X3_ar_ch[idx,])
+
+fit7_ar_ch <- step(fit_temp)
+```
+We can see that the model got the lags 1,4,6 and lag7. We cannot use AIC here, since AIC cannot be applicable to the differenced data. Now, I am going to produce the forecasts.
+```{r}
+frc7_ar_ch <- array(NA,c(4,1))
+for (i in 1:4){
+# Calculate the differences of the in-sample data
+data_ar_ch.diff <- diff(data_ar_ch.trn)
+# Create lags - same as before
+Xnew <- tail(data_ar_ch.diff, 7)
+Xnew <- c(Xnew, frc7_ar_ch)
+Xnew <- Xnew[i:(6+i)]
+Xnew <- Xnew[7:1]
+Xnew <- array(Xnew, c(1,7))
+colnames(Xnew) <- paste0("lag",1:7)
+Xnew <- as.data.frame(Xnew)
+# Forecast
+frc7_ar_ch[i] <- predict(fit7_ar_ch, Xnew)
+}
+
+frc7_ar_ch
+
+```
+The forecast we got are in differences. To compare with other models, I am going to reverse the differences.
+```{r}
+frc7_ar_ch <- cumsum(c(tail(data_ar_ch.trn, 1), frc7_ar_ch))
+frc7_ar_ch <- frc7_ar_ch[-1]
+frc7_ar_ch
+
+```
+
+Now, I am going to build and forecast lasso regression
+```{r}
+# I remove the first 7 rows by that contain NAs
+# For the explanatories I remove the first column
+
+xx_ar_ch <- as.matrix(X_ar_ch[-(1:7),-1])
+# For the target I retain only the first column
+yy_ar_ch <- as.matrix(X_ar_ch[-(1:7),1])
+
+fit8_ar_ch <- cv.glmnet(x=xx_ar_ch, y=yy_ar_ch)
+```
+
+
+
+```{r}
+frc_lasso_arch <- array(NA,c(4,1))
+for (i in 1:4){
+# Create inputs - note for lasso we do not transform these into data.frame
+Xnew <- c(tail(data_ar_ch.trn,7), frc_lasso_arch)
+Xnew <- (Xnew[i:(6+i)])[7:1]
+Xnew <- array(Xnew, c(1,7))
+colnames(Xnew) <- paste0("lag",1:7)
+
+# Forecast
+frc_lasso_arch[i] <- predict(fit8_ar_ch, Xnew)
+}
+
+frc_lasso_arch
+```
+Now, I am going to build and forecast ridge regression
+```{r}
+fit_ridge_arch <- cv.glmnet(x=xx_ar_ch, y=yy_ar_ch, alpha=0)
+
+```
+
+```{r}
+frc_ridge_arch <- array(NA,c(4,1))
+for (i in 1:4){
+# Create inputs - note for lasso we do not transform these into data.frame
+Xnew <- c(tail(data_ar_ch.trn,7), frc_ridge_arch)
+Xnew <- (Xnew[i:(6+i)])[7:1]
+Xnew <- array(Xnew, c(1,7))
+colnames(Xnew) <- paste0("lag",1:7)
+
+# Forecast
+frc_ridge_arch[i] <- predict(fit_ridge_arch, Xnew)
+}
+
+frc_ridge_arch
+```
+```{r}
+
+```
+
+
+Now, I am going to plot all the five models.
+```{r}
+frc_ets_ar_ch <- ts(frc_ets_ar_ch, frequency=frequency(data_ar_ch.tst), start=start(data_ar_ch.tst))
+frc5_ar_ch <- ts(frc5_ar_ch, frequency=frequency(data_ar_ch.tst), start=start(data_ar_ch.tst))
+frc6_ar_ch <- ts(frc6_ar_ch, frequency=frequency(data_ar_ch.tst), start=start(data_ar_ch.tst))
+frc7_ar_ch <- ts(frc7_ar_ch, frequency=frequency(data_ar_ch.tst), start=start(data_ar_ch.tst))
+frc_lasso_arch <- ts(frc_lasso_arch, frequency=frequency(data_ar_ch.tst), start=start(data_ar_ch.tst))
+frc_ridge_arch <- ts(frc_ridge_arch, frequency=frequency(data_ar_ch.tst), start=start(data_ar_ch.tst))
+ts.plot(data_ar_ch.trn, data_ar_ch.tst, frc_ets_ar_ch, frc5_ar_ch, frc6_ar_ch, frc7_ar_ch, frc_lasso_arch, frc_ridge_arch, col=c("black","black","orange","red","blue","green","yellow","brown"))
+legend("topleft",c("ETS-best", "OLS-Auto","OLS-Dummies","OLS-Difference","Lasso","Ridge"),col=c("orange","red","blue","green","yellow","brown"),lty=1)
+title("Toursim flow from Argentina to Chile")
+
+```
+
+```{r}
+# Create a data frame with model names and forecast values
+forecast_table <- data.frame(
+  Model = c("ETS", "Autoregressive", "Dummies", "Difference", "Lasso", "Ridge"),
+  Qtr1 = c(frc_ets_ar_ch[1], frc5_ar_ch[1], frc6_ar_ch[1], frc7_ar_ch[1], frc_lasso_arch[1], frc_ridge_arch[1]),
+  Qtr2 = c(frc_ets_ar_ch[2], frc5_ar_ch[2], frc6_ar_ch[2], frc7_ar_ch[2], frc_lasso_arch[2], frc_ridge_arch[2]),
+  Qtr3 = c(frc_ets_ar_ch[3], frc5_ar_ch[3], frc6_ar_ch[3], frc7_ar_ch[3], frc_lasso_arch[3], frc_ridge_arch[3]),
+  Qtr4 = c(frc_ets_ar_ch[4], frc5_ar_ch[4], frc6_ar_ch[4], frc7_ar_ch[4], frc_lasso_arch[4], frc_ridge_arch[4])
+)
+
+# Print the forecast table
+print(forecast_table)
+
+```
+ Now, I am going to evaluate all the OLS models together with the ETS models using Mean Absolute Error (MAE) and Mean Absolute Percentage Error (MAPE).
+```{r}
+
+
+# Calculate Mean Absolute Error (MAE) for each model
+MAE_ets_MNM <- mean(abs(data_ar_ch.tst[1:h] - frc_mnm_arch$mean))
+MAE_ets_MAdM <- mean(abs(data_ar_ch.tst[1:h] - frc_mAdm_arch$mean))
+MAE_ets_MMM <- mean(abs(data_ar_ch.tst[1:h] - frc_mmm_arch$mean))
+MAE_ets_MMdM <- mean(abs(data_ar_ch.tst[1:h] - frc_mMdm_arch$mean))
+MAE_ets_Naive <- mean(abs(data_ar_ch.tst[1:h] - frc_naive_arch))
+
+
+mae_ets <- mean(abs(data_ar_ch.tst - frc_ets_ar_ch))
+mae_autoregressive <- mean(abs(data_ar_ch.tst - frc5_ar_ch))
+mae_dummies <- mean(abs(data_ar_ch.tst - frc6_ar_ch))
+mae_difference <- mean(abs(data_ar_ch.tst - frc7_ar_ch))
+mae_lasso <- mean(abs(data_ar_ch.tst - frc_lasso_arch))
+mae_ridge <- mean(abs(data_ar_ch.tst - frc_ridge_arch))
+
+# Create a data frame for comparison
+mae_table <- data.frame(
+  Model = c("ETS-MNM", "ETS-MAdM", "ETS-MMM", "ETS-MMdM", "ETS-Naive", "OLS-Auto", "OLS-Dummies", "OLS-Difference", "Lasso", "Ridge"),
+  MAE = c(MAE_ets_MNM,MAE_ets_MAdM,MAE_ets_MMM,MAE_ets_MMdM,MAE_ets_Naive, mae_autoregressive, mae_dummies, mae_difference, mae_lasso, mae_ridge)
+)
+
+# Print the MAE comparison table
+print(mae_table)
+
+```
+```{r}
+class(data_ar_ch.tst)
+class(frc_mnm_arch)
+str(frc_naive_arch)
+```
+```{r}
+# Extract the forecast values
+frc_mnm_arch_values <- as.numeric(frc_mnm_arch$mean)
+frc_mAdm_arch_values <- as.numeric(frc_mAdm_arch$mean)
+frc_mmm_arch_values <- as.numeric(frc_mmm_arch$mean)
+frc_mMdm_arch_values <- as.numeric(frc_mMdm_arch$mean)
+frc_naive_arch_values <- as.numeric(frc_naive_arch)
+frc5_ar_ch_values <- as.numeric(frc5_ar_ch)
+frc6_ar_ch_values <- as.numeric(frc6_ar_ch)
+frc7_ar_ch_values <- as.numeric(frc7_ar_ch)
+frc_lasso_arch_values <- as.numeric(frc_lasso_arch)
+frc_ridge_arch_values <- as.numeric(frc_ridge_arch)
+
+
+# Print the forecast values
+print(frc_mnm_arch_values)
+print(frc_mAdm_arch_values)
+print(frc_mmm_arch_values)
+print(frc_mMdm_arch_values)
+print(frc_naive_arch_values)
+print(frc5_ar_ch_values)
+print(frc6_ar_ch_values)
+print(frc7_ar_ch_values)
+print(frc_lasso_arch_values)
+print(frc_ridge_arch_values)
+```
+
+
+```{r}
+# Calculate MAPE for each model
+MAPE_ets_mnm <- mean(abs((data_ar_ch.tst - frc_mnm_arch_values) / data_ar_ch.tst) * 100, na.rm = TRUE)
+MAPE_ets_madm <- mean(abs((data_ar_ch.tst - frc_mAdm_arch_values) / data_ar_ch.tst) * 100, na.rm = TRUE)
+MAPE_ets_mmm <- mean(abs((data_ar_ch.tst - frc_mmm_arch_values) / data_ar_ch.tst) * 100, na.rm = TRUE)
+MAPE_ets_mmdm <- mean(abs((data_ar_ch.tst - frc_mMdm_arch_values) / data_ar_ch.tst) * 100, na.rm = TRUE)
+MAPE_ets_naive <- mean(abs((data_ar_ch.tst - frc_naive_arch_values) / data_ar_ch.tst) * 100, na.rm = TRUE)
+MAPE_ols_auto <- mean(abs((data_ar_ch.tst - frc5_ar_ch_values) / data_ar_ch.tst) * 100, na.rm = TRUE)
+MAPE_ols_dummies <- mean(abs((data_ar_ch.tst - frc6_ar_ch_values) / data_ar_ch.tst) * 100, na.rm = TRUE)
+MAPE_ols_diff <- mean(abs((data_ar_ch.tst - frc7_ar_ch_values) / data_ar_ch.tst) * 100, na.rm = TRUE)
+MAPE_lasso <- mean(abs((data_ar_ch.tst - frc_lasso_arch_values) / data_ar_ch.tst) * 100, na.rm = TRUE)
+MAPE_ridge <- mean(abs((data_ar_ch.tst - frc_ridge_arch_values) / data_ar_ch.tst) * 100, na.rm = TRUE)
+
+# Create a vector of MAPE values
+MAPE_values <- c(MAPE_ets_mnm, MAPE_ets_madm, MAPE_ets_mmm, MAPE_ets_mmdm, MAPE_ets_naive, MAPE_ols_auto, MAPE_ols_dummies, MAPE_ols_diff, MAPE_lasso, MAPE_ridge)
+
+# Create a vector of model names
+model_names <- c("ETS-MNM", "ETS-MAdM", "ETS-MMM", "ETS-MMdM", "ETS-Naive", "OLS-Auto", "OLS-Dummies", "OLS-Diff", "Lasso", "Ridge")
+
+# Combine the model names and MAPE values into a data frame
+mape_df <- data.frame(Model = model_names, MAPE = MAPE_values)
+
+# Print the MAPE values
+print(mape_df)
+
+```
+
+```{r}
+# Assuming MAE_df and MAPE_df have the same number of rows
+combined_df <- cbind(mae_table, mape_df)
+
+# Alternatively, using data.frame
+combined_df <- data.frame(mae_table, mape_df)
+combined_df
+```
+From the results, we can see that the ETS-MMdM model performed best when compared to all other models.
+
+### Forecasting tourism flow from Brazil to Chile
+
+```{r}
+
+# Getting the values for the origin Brazil.
+data_br_ch <- data_ch[,2]
+print(data_br_ch)
+```
+## #### Creating Train and Test Data
+```{r}
+# Taking year 2019 data as the test data
+data_br_ch.tst <- window(data_br_ch, frequency=4, start=c(2019, 1))
+print('Test Data')
+print(data_br_ch.tst)
+
+# Rest of the data is taken as training data
+data_br_ch.trn <- window(data_br_ch, frequency=4, end=c(2018, 4))
+print('Training Data')
+print(data_br_ch.trn)
+```
+#### Exploring the time series
+```{r}
+plot(data_br_ch, ylab="Toursim flow from Brazil to Chile")
+```
+
+Here, I am going to calculate Central Moving Average and plot it
+```{r}
+cma_br_ch <- cmav(data_br_ch.trn, outplot=1)
+title(main="Tourism flow from Brazil to Chile")
+```
+Now, I am going to plot the seasonal plot.
+```{r}
+# Plotting the seasonal plot
+seasplot(data_br_ch.trn)
+
+# Plotting the seasonal boxplot
+seasplot(data_br_ch.trn, outplot=2)
+
+# Plotting the seasonal subseries plot
+seasplot(data_br_ch.trn,outplot=3)
+```
+Results of statistical testing
+Evidence of trend: TRUE  (pval: 0)
+Evidence of seasonality: TRUE  (pval: 0)
+
+
+
+From the plots, we can see model has both trend and multiplicative seasonality. Now, I am going to decompose the time series.
+```{r}
+# Decomposing the time series
+dc_br_ch <- decomp(data_br_ch.trn,outplot=1)
+
+```
+```{r}
+# Load necessary libraries
+library(ggplot2)
+
+# Apply additive decomposition
+decomp_additive <- decompose(data_br_ch, type = "additive")
+
+# Apply multiplicative decomposition
+decomp_multiplicative <- decompose(data_br_ch, type = "multiplicative")
+
+# Plot the decomposed components
+par(mfrow = c(3, 3))  # Set up a 3x3 grid for the plots
+
+# Original time series
+plot(data_br_ch, main = "Original Time Series", col = "blue")
+
+# Additive decomposition components
+plot(decomp_additive$trend, main = "Additive Trend", col = "red")
+plot(decomp_additive$seasonal, main = "Additive Seasonal", col = "green")
+plot(decomp_additive$random, main = "Additive Residuals", col = "purple")
+
+# Multiplicative decomposition components
+plot(decomp_multiplicative$trend, main = "Multiplicative Trend", col = "red")
+plot(decomp_multiplicative$seasonal, main = "Multiplicative Seasonal", col = "green")
+plot(decomp_multiplicative$random, main = "Multiplicative Residuals", col = "purple")
+
+# Reset the plotting layout
+par(mfrow = c(1, 1))
+```
+
+#### Building the Model using Exponential Smoothing
+
+Initially, I am going to forecast the timeseries using information criteria without explicitly specifying ETS model.
+
+
+```{r}
+fit_br_ch <- ets(data_br_ch.trn)
+fit_br_ch
+
+```
+Here, we can see ETS(M,N,M) is chosen as the best model. Now, I am going to construct the forecasting model by preselecting the exponential smoothing type. Since, there is trend and seasonality, I am going to build ETS(M,Ad,M), ETS(M,M,M) and ETS(M,Md,M)
+```{r}
+fit1_br_ch <- ets(data_br_ch.trn, model="MAM", damped=TRUE)
+fit2_br_ch <- ets(data_br_ch.trn, model="MMM", damped=FALSE)
+fit3_br_ch <- ets(data_br_ch.trn, model="MMM", damped=TRUE)
+```
+
+Now, I am going to get the ETS model with best AICc.
+```{r}
+aicc <- c(fit_br_ch$aicc,fit1_br_ch$aicc, fit2_br_ch$aicc, fit3_br_ch$aicc)
+names(aicc) <- c("MNM","MAdM","MMM","MMdM")
+aicc
+
+```
+```{r}
+which.min(aicc)
+```
+We can see that the third model where smoothing type is selected automatically gives the best AICc. Now, I am going to forecast these fours models and Naive model.
+#### Forecasting the time series
+
+Here, I am going to forecast the fours models we build and the Naive model. Since the test set is only for one year, I am going to do single origin evaluation.
+```{r}
+# Forecast period is defined as 4, since we are forecasting for the next 4 quarters of 2019
+h <- 4
+
+# Forcasting all the models
+frc_mnm_brch <- forecast(fit_br_ch, h=h)
+frc_mAdm_brch <- forecast(fit1_br_ch, h=h)
+frc_mmm_brch <- forecast(fit2_br_ch, h=h)
+frc_mMdm_brch <- forecast(fit3_br_ch, h=h)
+
+# And the naive:
+frc_naive_brch <- tail(data_br_ch.trn, frequency(data_br_ch.trn))[1:h] # that is copy the last season
+
+```
+Now, I am plotting forecasts of all the models below.
+```{r}
+plot(frc_mnm_brch)
+plot(frc_mAdm_brch)
+plot(frc_mmm_brch)
+plot(frc_mMdm_brch)
+plot(frc_naive_brch)
+
+```
+Now, I am going to evaluate the forecasts using Mean Absolute Error (MAE) and Mean Absolute Percentage Error (MAPE). Since our forecast horizon is 4, I am going to take first 4 observations from the test set.
+```{r}
+
+MAE_ets_MNM <- mean(abs(data_br_ch.tst[1:h] - frc_mnm_brch$mean))
+MAE_ets_MAdM <- mean(abs(data_br_ch.tst[1:h] - frc_mAdm_brch$mean))
+MAE_ets_MMM <- mean(abs(data_br_ch.tst[1:h] - frc_mmm_brch$mean))
+MAE_ets_MMdM <- mean(abs(data_br_ch.tst[1:h] - frc_mMdm_brch$mean))
+MAE_ets_Naive <- mean(abs(data_br_ch.tst[1:h] - frc_naive_arch))
+
+MAE_br_ch <- c(MAE_ets_MNM, MAE_ets_MAdM, MAE_ets_MMM, MAE_ets_MMdM, MAE_ets_Naive) # Collect them in a single vector
+
+names(MAE_br_ch) <- c("MNM","MAdM","MMM","MMdM","Naive")
+round(MAE_br_ch, 3) # round to 3rd decimal point
+
+```
+```{r}
+which.min(MAE_br_ch)
+```
+
+```{r}
+MAPE_ets_MNM <- mean(abs((data_br_ch.tst[1:h] - frc_mnm_brch$mean)/data_br_ch.tst[1:h]))
+MAPE_ets_MAdm <- mean(abs((data_br_ch.tst[1:h] - frc_mAdm_brch$mean)/data_br_ch.tst[1:h]))
+MAPE_ets_MMM <- mean(abs((data_br_ch.tst[1:h] - frc_mmm_brch$mean)/data_br_ch.tst[1:h]))
+MAPE_ets_MMdM <- mean(abs((data_br_ch.tst[1:h] - frc_mMdm_brch$mean)/data_br_ch.tst[1:h]))
+MAPE_ets_Naive <- mean(abs((data_br_ch.tst[1:h] - frc_naive_arch)/data_br_ch.tst[1:h]))
+
+MAPE_br_ch <- c(MAPE_ets_MNM, MAPE_ets_MAdm, MAPE_ets_MMM, MAPE_ets_MMdM, MAPE_ets_Naive) # Collect them in a single vector
+
+names(MAPE_br_ch) <- c("MNM","MAdM","MMM","MMdM","Naive")
+round(MAPE_br_ch, 3) # round to 3rd decimal point
+```
+
+```{r}
+which.min(MAPE_br_ch)
+```
+According to MAE and MAPE, first model which uses MNM produces the best forecast with least error
+```{r}
+frc_ets_br_ch <- frc_mnm_brch$mean
+MAPE_ets_br_ch <- MAPE_ets_MNM
+```
+#### Building the Model using OLS
+
+Initially, I am going to plot training data
+```{r}
+plot(data_br_ch.trn)
+```
+```{r}
+decomposed <- decompose(data_br_ch.trn)
+```
+```{r}
+plot(decomposed$seasonal, main = "Seasonal Component")
+```
+We can see that the data has multiplicative seasonality. It is not good for the regression modelling. So, I am going to convert the data in logarithms and do the regression.
+```{r}
+data_br_ch.trn_log <- log(data_br_ch.trn)
+plot(data_br_ch.trn_log)
+
+```
+
+Now, the seasonality becomes additive. Now, I am going to build the OLS model using lags. So, I am going to find the lag-structure of the time series. I am doing this by using both PACF (Partial AutoCorrelation Function).
+```{r}
+pacf(log(data_br_ch.trn_log))
+
+```
+#### According to PACF, we can see that the lags 1, 2, 4,  and 5 are significant which may be helpful inputs for a regression model. Now, I am going to construct lags. Initially, I am going to get total number of observations in the training set.
+```{r}
+n <- length(data_br_ch.trn_log)
+n
+
+```
+
+### I am going to create regression with 7 lags. For this, I am going to create an array with NA (Non-Arithmetic) values having n rows and 8 columns. One column is for the target and all other 7 columns for the lags.
+```{r}
+X_br_ch <- array(NA, c(n, 8))
+
+for (i in 1:8){
+X_br_ch[i:n,i] <- log(data_br_ch.trn_log)[1:(n-i+1)]
+}
+
+# Name the columns
+colnames(X_br_ch) <- c("Brazil", paste0("lag",1:7))
+
+X_br_ch[1:10,]
+```
+Now, I am getting the last 10 rows.
+```{r}
+X_br_ch[(n-9):n,]
+
+```
+
+```{r}
+X_br_ch <- as.data.frame(X_br_ch)
+plot(X_br_ch)
+```
+
+We can see from the scatter plot that it looks linear. Now, I am going to do regression using the complete model and the stepwise selection.
+```{r}
+# The complete model
+summary(lm(Brazil ~., data=X_br_ch))
+
+```
+## We can see only lag1,lag4 and lag5 looks significant. Now, I am going to do regression using stepwise. But, it will throw error because of the NA values. We have to resolve this issue before running the stepwise model.
+```{r}
+# Find NA in X
+idx <- is.na(X_br_ch)
+# The result is logical TRUE/FALSE values
+idx[1:10,]
+
+```
+
+```{r}
+# Finding NA value count in each row.
+idx <- rowSums(idx)
+
+# Getting the row indexes which does not contains any NA values.
+idx <- idx == 0
+idx
+```
+
+
+Now, I am going to build the stepwise regression model after removing the redundant data.
+
+```{r}
+# The stepwise model
+fit_temp <- lm(Brazil~., data=X_br_ch[idx,])
+
+fit5_br_ch <- step(fit_temp)
+
+```
+
+```{r}
+# The stepwise model suggests lags 1, 2,4 and 5  as significant. Now, I am going to do forecasting the model using the test set. I am going to forecast for the period from t + 1 to t+4.
+frc5_br_ch <- array(NA,c(4,1))
+for (i in 1:4){
+# For the Xnew we use the last 7 observations as before
+Xnew <- tail(data_br_ch.trn, 7)
+# Add to that the forecasted values
+Xnew <- c(Xnew, frc5_br_ch)
+
+# Take the relevant 7 values. The index i helps us to get the right ones
+Xnew <- Xnew[i:(6+i)]
+# If i = 1 then this becomes Xnew[1:7].
+# If i = 2 then this becomes Xnew[2:8] - just as the example above.
+# Reverse the order
+Xnew <- Xnew[7:1]
+# Make Xnew an array and name the inputs
+Xnew <- array(Xnew, c(1,7)) # c(1,7) are the dimensions of the array
+colnames(Xnew) <- paste0("lag",1:7) # I have already reversed the order
+# Convert to data.frame
+Xnew <- as.data.frame(Xnew)
+# Forecast
+frc5_br_ch[i] <- predict(fit5_br_ch, Xnew)
+}
+frc5_br_ch
+
+```
+
+Now, I am going to forecast using dummy variables, since there is seasonality for the data.
+```{r}
+length(data_br_ch.trn)/4
+
+```
+
+Since the training data has 21 years, I am creating dummy variables for 21 years for each quarters.
+```{r}
+D <- rep(1:4, 21) # Replicate 1:4 21 times
+D <- factor(D)
+factor(rep(c("Q1","Q2","Q3","Q4"), 21))
+
+```
+Now, I am going to bind the dummies with the lags in X.
+
+
+```{r}
+D <- rep(1:4, length.out = nrow(X_br_ch))
+
+# Bind the dummies with the lags in X_ch_ar
+X2_br_ch <- cbind(X_br_ch, D)
+colnames(X2_br_ch) <- c(colnames(X_br_ch)[1:8], "D")
+X2_br_ch
+```
+
+Now, I am going to build the regression using all the seven lags.
+```{r}
+summary(lm(Brazil ~.,data=X2_br_ch))
+```
+
+## We can see  lag1, lag2, lag4, and lag5 have very low p-values indicating that they are likely to be statistically significant.lag3, lag6, and lag7 have higher p-values, suggesting that their coefficients may not be significantly different from zero. Now, I am going to do regression using stepwise. But, it will throw error because of the NA values. We have to resolve this issue before running the stepwise model.
+```{r}
+# Find NA in X2
+idx <- is.na(X2_br_ch)
+# The result is logical TRUE/FALSE values
+idx[1:10,]
+
+```
+```{r}
+# Finding NA value count in each row.
+idx <- rowSums(idx)
+
+# Getting the row indexes which does not contains any NA values.
+idx <- idx == 0
+idx
+```
+
+Now, I am going to build the stepwise regression model after removing the redundant data.
+# The stepwise model
+```{r}
+fit_temp <- lm(Brazil~., data=X2_br_ch[idx,])
+
+fit6_br_ch <- step(fit_temp)
+
+
+```
+We can see that the model got lag1, lag2, lag4, lag5 and the dummies. Now, I am going to compare the AIC of this model with the Autoregressive OLS model we got before.
+```{r}
+c(AIC(fit5_br_ch), AIC(fit6_br_ch))
+
+```
+```{r}
+fit6_br_ch
+```
+
+## We can see that the model using the dummy variable  performs best. Now, I am going to forecast the model using the out-sample data. I am going to forecast for the period from t + 1 to t+4.
+
+```{r}
+frc6_br_ch <- numeric(4)  # Initialize the forecast vector
+
+for (i in 1:4) {
+  # For Xnew, use the last 7 observations as before
+  Xnew <- tail(data_br_ch.trn, 7)
+  
+  # Take the relevant 7 values. The index i helps us to get the right ones
+  Xnew <- Xnew[i:(6 + i)]
+  
+  # Remove NAs from lag variables
+  Xnew <- na.omit(Xnew)
+  
+  # Reverse the order of Xnew to match the order of lag variables
+  Xnew <- rev(Xnew)
+  
+  # Make Xnew an array and name the inputs
+  Xnew <- array(Xnew, c(1, 7))
+  colnames(Xnew) <- paste0("lag", 1:7)
+  
+  # Create the value of the dummy
+  D <- i
+  Xnew <- cbind(Xnew, D)
+  
+  # Convert to data.frame
+  Xnew <- as.data.frame(Xnew)
+  
+  # Print Xnew to investigate
+  print(Xnew)
+  
+  # Forecast
+  frc6_br_ch[i] <- predict(fit6_br_ch, newdata = Xnew)
+}
+
+frc6_br_ch
+
+
+```
+
+```{r}
+frc6_br_ch <- numeric(4)  # Initialize the forecast vector
+
+for (i in 1:4) {
+  # For Xnew, use the last 7 observations as before
+  Xnew <- tail(data_br_ch.trn, 7)
+  
+  # Take the relevant 7 values. The index i helps us to get the right ones
+  Xnew <- Xnew[i:(6 + i)]
+  
+  # Remove NAs from lag variables
+  Xnew <- na.omit(Xnew)
+  
+  # Reverse the order of Xnew to match the order of lag variables
+  Xnew <- rev(Xnew)
+  
+  # Make Xnew an array and name the inputs
+  Xnew <- array(Xnew, c(1, 7))
+  colnames(Xnew) <- paste0("lag", 1:7)
+  
+  # Create the value of the dummy
+  D <- i
+  Xnew <- cbind(Xnew, D)
+  
+  # Convert to data.frame
+  Xnew <- as.data.frame(Xnew)
+  
+  # Print Xnew to investigate
+  print(Xnew)
+  
+  # Forecast
+  frc6_br_ch[i] <- predict(fit6_br_ch, newdata = Xnew)
+}
+
+frc6_br_ch
+
+```
+
+Now, I am going to model in differences. Initially, I am going to retain the data without lags
+```{r}
+X3_br_ch <- X_br_ch
+```
+
+Now, I am going to calculate differences for each column.
+```{r}
+# The function ncol() counts how many columns
+for (i in 1:ncol(X3_br_ch)){
+X3_br_ch[,i] <- c(NA,diff(X3_br_ch[,i]))
+}
+
+print(X3_br_ch)
+```
+
+Now, I am going to build the regression using all the 7 lags
+```{r}
+summary(lm(Brazil ~., data=X3_br_ch))
+
+```
+
+We can see that only lag 1,2,4 and 7 looks significant. Now, I am going to do stepwise regression model. But, it will throw error because of the NA values. We have to resolve this issue before running the stepwise model.
+```{r}
+idx <- is.na(X3_br_ch)
+idx[1:10,]
+
+```
+
+
+```{r}
+# Finding NA value count in each row.
+idx <- rowSums(idx)
+
+# Getting the row indexes which does not contains any NA values.
+idx <- idx == 0
+idx
+```
+
+Now, I am going to build the stepwise regression model after removing the redundant data.
+```{r}
+# The stepwise model
+fit_temp <- lm(Brazil~., data=X3_br_ch[idx,])
+
+fit7_br_ch <- step(fit_temp)
+```
+
+We can see that the model got the lags 1,2,4,6 and lag7. We cannot use AIC here, since AIC cannot be applicable to the differenced data. Now, I am going to produce the forecasts.
+```{r}
+frc7_br_ch <- array(NA,c(4,1))
+for (i in 1:4){
+# Calculate the differences of the in-sample data
+data_br_ch.diff <- diff(data_br_ch.trn)
+# Create lags - same as before
+Xnew <- tail(data_br_ch.diff, 7)
+Xnew <- c(Xnew, frc7_br_ch)
+Xnew <- Xnew[i:(6+i)]
+Xnew <- Xnew[7:1]
+Xnew <- array(Xnew, c(1,7))
+colnames(Xnew) <- paste0("lag",1:7)
+Xnew <- as.data.frame(Xnew)
+# Forecast
+frc7_br_ch[i] <- predict(fit7_br_ch, Xnew)
+}
+
+frc7_br_ch
+
+```
+
+The forecast we got are in differences. To compare with other models, I am going to reverse the differences.
+```{r}
+frc7_br_ch <- cumsum(c(tail(data_br_ch.trn, 1), frc7_br_ch))
+frc7_br_ch <- frc7_br_ch[-1]
+frc7_br_ch
+
+```
+
+Now, I am going to build and forecast lasso regression
+```{r}
+# I remove the first 7 rows by that contain NAs
+# For the explanatories I remove the first column
+
+xx_br_ch <- as.matrix(X_br_ch[-(1:7),-1])
+# For the target I retain only the first column
+yy_br_ch <- as.matrix(X_br_ch[-(1:7),1])
+
+fit_lasso_br_ch <- cv.glmnet(x=xx_br_ch, y=yy_br_ch)
+```
+
+
+
+```{r}
+frc_lasso_brch <- array(NA,c(4,1))
+for (i in 1:4){
+# Create inputs - note for lasso we do not transform these into data.frame
+Xnew <- c(tail(data_br_ch.trn,7), frc_lasso_brch)
+Xnew <- (Xnew[i:(6+i)])[7:1]
+Xnew <- array(Xnew, c(1,7))
+colnames(Xnew) <- paste0("lag",1:7)
+
+# Forecast
+frc_lasso_brch[i] <- predict(fit_lasso_br_ch, Xnew)
+}
+
+frc_lasso_brch
+```
+Now, I am going to build and forecast ridge regression
+```{r}
+fit_ridge_brch <- cv.glmnet(x=xx_br_ch, y=yy_br_ch, alpha=0)
+
+```
+
+```{r}
+frc_ridge_brch <- array(NA,c(4,1))
+for (i in 1:4){
+# Create inputs - note for lasso we do not transform these into data.frame
+Xnew <- c(tail(data_br_ch.trn,7), frc_ridge_brch)
+Xnew <- (Xnew[i:(6+i)])[7:1]
+Xnew <- array(Xnew, c(1,7))
+colnames(Xnew) <- paste0("lag",1:7)
+
+# Forecast
+frc_ridge_brch[i] <- predict(fit_ridge_brch, Xnew)
+}
+
+frc_ridge_brch
+```
+```{r}
+data_br_ch.trn
+```
+
+
+Now, I am going to plot all the five models.
+```{r}
+# Convert forecasts to time series objects with the same frequency and start date
+frc_ets_br_ch <- ts(frc_ets_br_ch, frequency = frequency(data_br_ch.tst), start = start(data_br_ch.tst))
+frc5_br_ch <- ts(frc5_br_ch, frequency = frequency(data_br_ch.tst), start = start(data_br_ch.tst))
+frc6_br_ch <- ts(frc6_br_ch, frequency = frequency(data_br_ch.tst), start = start(data_br_ch.tst))
+frc7_br_ch <- ts(frc7_br_ch, frequency = frequency(data_br_ch.tst), start = start(data_br_ch.tst))
+frc_lasso_brch <- ts(frc_lasso_brch, frequency = frequency(data_br_ch.tst), start = start(data_br_ch.tst))
+frc_ridge_brch <- ts(frc_ridge_brch, frequency = frequency(data_br_ch.tst), start = start(data_br_ch.tst))
+
+# Plot the time series data and forecasts
+ts.plot(data_br_ch.trn, data_br_ch.tst, frc_ets_br_ch, frc5_br_ch, frc6_br_ch, frc7_br_ch, frc_lasso_brch, frc_ridge_brch,
+        col = c("black", "black", "orange", "red", "blue", "green", "yellow", "brown"))
+
+# Add legend and title
+legend("topleft", c("ETS-best", "OLS-Auto", "OLS-Dummies", "OLS-Difference", "Lasso", "Ridge"),
+       col = c("orange", "red", "blue", "green", "yellow", "brown"), lty = 1)
+title("Tourism flow from Brazil to Chile")
+
+```
+
+
+```{r}
+# Create a data frame with model names and forecast values
+forecast_table <- data.frame(
+  Model = c("ETS-best", "OLS-Auto", "OLS-Dummies", "OLS-Difference", "Lasso", "Ridge"),
+  Qtr1 = c(frc_ets_br_ch[1], frc5_br_ch[1], frc6_br_ch[1], frc7_br_ch[1], frc_lasso_arch[1], frc_ridge_arch[1]),
+  Qtr2 = c(frc_ets_br_ch[2], frc5_br_ch[2], frc6_br_ch[2], frc7_br_ch[2], frc_lasso_arch[2], frc_ridge_arch[2]),
+  Qtr3 = c(frc_ets_br_ch[3], frc5_br_ch[3], frc6_br_ch[3], frc7_br_ch[3], frc_lasso_arch[3], frc_ridge_arch[3]),
+  Qtr4 = c(frc_ets_br_ch[4], frc5_br_ch[4], frc6_br_ch[4], frc7_br_ch[4], frc_lasso_arch[4], frc_ridge_arch[4])
+)
+
+# Print the forecast table
+print(forecast_table)
+
+```
+Now, I am going to evaluate all the OLS models together with the ETS models using Mean Absolute Error (MAE) and Mean Absolute Percentage Error (MAPE).
+```{r}
+
+
+# Calculate Mean Absolute Error (MAE) for each model
+MAE_ets_MNM <- mean(abs(data_br_ch.tst[1:h] - frc_mnm_brch$mean))
+MAE_ets_MAdM <- mean(abs(data_br_ch.tst[1:h] - frc_mAdm_brch$mean))
+MAE_ets_MMM <- mean(abs(data_br_ch.tst[1:h] - frc_mmm_brch$mean))
+MAE_ets_MMdM <- mean(abs(data_br_ch.tst[1:h] - frc_mMdm_brch$mean))
+MAE_ets_Naive <- mean(abs(data_br_ch.tst[1:h] - frc_naive_brch))
+
+
+mae_ets <- mean(abs(data_br_ch.tst - frc_ets_br_ch))
+mae_autoregressive <- mean(abs(data_br_ch.tst - frc5_br_ch))
+mae_dummies <- mean(abs(data_br_ch.tst - frc6_br_ch))
+mae_difference <- mean(abs(data_br_ch.tst - frc7_br_ch))
+mae_lasso <- mean(abs(data_br_ch.tst - frc_lasso_brch))
+mae_ridge <- mean(abs(data_br_ch.tst - frc_ridge_brch))
+
+# Create a data frame for comparison
+mae_table <- data.frame(
+  Model = c("ETS-MNM", "ETS-MAdM", "ETS-MMM", "ETS-MMdM", "ETS-Naive", "OLS-Auto", "OLS-Dummies", "OLS-Difference", "Lasso", "Ridge"),
+  MAE = c(MAE_ets_MNM,MAE_ets_MAdM,MAE_ets_MMM,MAE_ets_MMdM,MAE_ets_Naive, mae_autoregressive, mae_dummies, mae_difference, mae_lasso, mae_ridge)
+)
+
+# Print the MAE comparison table
+print(mae_table)
+
+```
+
+```{r}
+class(data_br_ch.tst)
+class(frc_mnm_brch)
+str(frc_naive_brch)
+```
+
+```{r}
+# Extract the forecast values
+frc_mnm_brch_values <- as.numeric(frc_mnm_brch$mean)
+frc_mAdm_brch_values <- as.numeric(frc_mAdm_brch$mean)
+frc_mmm_brch_values <- as.numeric(frc_mmm_brch$mean)
+frc_mMdm_brch_values <- as.numeric(frc_mMdm_brch$mean)
+frc_naive_brch_values <- as.numeric(frc_naive_brch)
+frc5_br_ch_values <- as.numeric(frc5_br_ch)
+frc6_br_ch_values <- as.numeric(frc6_br_ch)
+frc7_br_ch_values <- as.numeric(frc7_br_ch)
+frc_lasso_brch_values <- as.numeric(frc_lasso_brch)
+frc_ridge_brch_values <- as.numeric(frc_ridge_brch)
+
+
+# Print the forecast values
+print(frc_mnm_brch_values)
+print(frc_mAdm_brch_values)
+print(frc_mmm_brch_values)
+print(frc_mMdm_brch_values)
+print(frc_naive_brch_values)
+print(frc5_br_ch_values)
+print(frc6_br_ch_values)
+print(frc7_br_ch_values)
+print(frc_lasso_brch_values)
+print(frc_ridge_brch_values)
+```
+```{r}
+# Calculate MAPE for each model
+MAPE_ets_mnm <- mean(abs((data_br_ch.tst - frc_mnm_brch_values) / data_br_ch.tst) * 100, na.rm = TRUE)
+MAPE_ets_madm <- mean(abs((data_br_ch.tst - frc_mAdm_brch_values) / data_br_ch.tst) * 100, na.rm = TRUE)
+MAPE_ets_mmm <- mean(abs((data_br_ch.tst - frc_mmm_brch_values) / data_br_ch.tst) * 100, na.rm = TRUE)
+MAPE_ets_mmdm <- mean(abs((data_br_ch.tst - frc_mMdm_brch_values) / data_br_ch.tst) * 100, na.rm = TRUE)
+MAPE_ets_naive <- mean(abs((data_br_ch.tst - frc_naive_brch_values) / data_br_ch.tst) * 100, na.rm = TRUE)
+MAPE_ols_auto <- mean(abs((data_br_ch.tst - frc5_br_ch_values) / data_br_ch.tst) * 100, na.rm = TRUE)
+MAPE_ols_dummies <- mean(abs((data_br_ch.tst - frc6_br_ch_values) / data_br_ch.tst) * 100, na.rm = TRUE)
+MAPE_ols_diff <- mean(abs((data_br_ch.tst - frc7_br_ch_values) / data_br_ch.tst) * 100, na.rm = TRUE)
+MAPE_lasso <- mean(abs((data_br_ch.tst - frc_lasso_brch_values) / data_br_ch.tst) * 100, na.rm = TRUE)
+MAPE_ridge <- mean(abs((data_br_ch.tst - frc_ridge_brch_values) / data_br_ch.tst) * 100, na.rm = TRUE)
+
+# Create a vector of MAPE values
+MAPE_values <- c(MAPE_ets_mnm, MAPE_ets_madm, MAPE_ets_mmm, MAPE_ets_mmdm, MAPE_ets_naive, MAPE_ols_auto, MAPE_ols_dummies, MAPE_ols_diff, MAPE_lasso, MAPE_ridge)
+
+# Create a vector of model names
+model_names <- c("ETS-MNM", "ETS-MAdM", "ETS-MMM", "ETS-MMdM", "ETS-Naive", "OLS-Auto", "OLS-Dummies", "OLS-Diff", "Lasso", "Ridge")
+
+# Combine the model names and MAPE values into a data frame
+mape_df <- data.frame(Model = model_names, MAPE = MAPE_values)
+
+# Print the MAPE values
+print(mape_df)
+
+```
+```{r}
+# Assuming MAE_df and MAPE_df have the same number of rows
+combined_df <- cbind(mae_table, mape_df)
+
+# Alternatively, using data.frame
+combined_df <- data.frame(mae_table, mape_df)
+combined_df
+```
+From the results, we can see that the OLS-Difference model performed best when compared to all other models.
+
+### Forecasting tourism flow from Bolivia to Chile
+
+```{r}
+
+# Getting the values for the origin Bolivia.
+data_bo_ch <- data_ch[,3]
+print(data_bo_ch)
+```
+```{r}
+## #### Creating Train and Test Data
+
+# Taking year 2019 data as the test data
+data_bo_ch.tst <- window(data_bo_ch, frequency=4, start=c(2019, 1))
+print('Test Data')
+print(data_bo_ch.tst)
+
+# Rest of the data is taken as training data
+data_bo_ch.trn <- window(data_bo_ch, frequency=4, end=c(2018, 4))
+print('Training Data')
+print(data_bo_ch.trn)
+```
+```{r}
+#### Exploring the time series
+
+plot(data_bo_ch, ylab="Toursim flow from Bolivia to Chile")
+```
+
+Here, I am going to calculate Central Moving Average and plot it
+```{r}
+cma_bo_ch <- cmav(data_bo_ch.trn, outplot=1)
+title(main="Tourism flow from Bolivia to Chile")
+```
+Now, I am going to plot the seasonal plot.
+```{r}
+# Plotting the seasonal plot
+seasplot(data_bo_ch.trn)
+
+# Plotting the seasonal boxplot
+seasplot(data_bo_ch.trn, outplot=2)
+
+# Plotting the seasonal subseries plot
+seasplot(data_bo_ch.trn,outplot=3)
+```
+Results of statistical testing
+Evidence of trend: TRUE  (pval: 0)
+Evidence of seasonality: TRUE  (pval: 0)
+
+
+
+From the plots, we can see model has both trend and multiplicative seasonality. Now, I am going to decompose the time series.
+```{r}
+# Decomposing the time series
+dc_bo_ch <- decomp(data_bo_ch.trn,outplot=1)
+
+```
+```{r}
+# Load necessary libraries
+library(ggplot2)
+
+# Apply additive decomposition
+decomp_additive <- decompose(data_bo_ch, type = "additive")
+
+# Apply multiplicative decomposition
+decomp_multiplicative <- decompose(data_bo_ch, type = "multiplicative")
+
+# Plot the decomposed components
+par(mfrow = c(3, 3))  # Set up a 3x3 grid for the plots
+
+# Original time series
+plot(data_bo_ch, main = "Original Time Series", col = "blue")
+
+# Additive decomposition components
+plot(decomp_additive$trend, main = "Additive Trend", col = "red")
+plot(decomp_additive$seasonal, main = "Additive Seasonal", col = "green")
+plot(decomp_additive$random, main = "Additive Residuals", col = "purple")
+
+# Multiplicative decomposition components
+plot(decomp_multiplicative$trend, main = "Multiplicative Trend", col = "red")
+plot(decomp_multiplicative$seasonal, main = "Multiplicative Seasonal", col = "green")
+plot(decomp_multiplicative$random, main = "Multiplicative Residuals", col = "purple")
+
+# Reset the plotting layout
+par(mfrow = c(1, 1))
+```
+
+#### Building the Model using Exponential Smoothing
+
+Initially, I am going to forecast the timeseries using information criteria without explicitly specifying ETS model.
+
+
+```{r}
+fit_bo_ch <- ets(data_bo_ch.trn)
+fit_bo_ch
+
+```
+Here, we can see ETS(M,N,M) is chosen as the best model. Now, I am going to construct the forecasting model by preselecting the exponential smoothing type. Since, there is trend and seasonality, I am going to build ETS(M,Ad,M), ETS(M,M,M) and ETS(M,Md,M)
+```{r}
+fit1_bo_ch <- ets(data_bo_ch.trn, model="MAM", damped=TRUE)
+fit2_bo_ch <- ets(data_bo_ch.trn, model="MMM", damped=FALSE)
+fit3_bo_ch <- ets(data_bo_ch.trn, model="MMM", damped=TRUE)
+```
+
+Now, I am going to get the ETS model with best AICc.
+```{r}
+aicc <- c(fit_bo_ch$aicc,fit1_bo_ch$aicc, fit2_bo_ch$aicc, fit3_bo_ch$aicc)
+names(aicc) <- c("MNM","MAdM","MMM","MMdM")
+aicc
+
+```
+```{r}
+which.min(aicc)
+```
+We can see that the first model where smoothing type is selected automatically gives the best AICc. Now, I am going to forecast these fours models and Naive model.
+#### Forecasting the time series
+
+Here, I am going to forecast the fours models we build and the Naive model. Since the test set is only for one year, I am going to do single origin evaluation.
+```{r}
+# Forecast period is defined as 4, since we are forecasting for the next 4 quarters of 2019
+h <- 4
+
+# Forcasting all the models
+frc_mnm_boch <- forecast(fit_bo_ch, h=h)
+frc_mAdm_boch <- forecast(fit1_bo_ch, h=h)
+frc_mmm_boch <- forecast(fit2_bo_ch, h=h)
+frc_mMdm_boch <- forecast(fit3_bo_ch, h=h)
+
+# And the naive:
+frc_naive_boch <- tail(data_bo_ch.trn, frequency(data_bo_ch.trn))[1:h] # that is copy the last season
+
+```
+Now, I am plotting forecasts of all the models below.
+```{r}
+plot(frc_mnm_boch)
+plot(frc_mAdm_boch)
+plot(frc_mmm_boch)
+plot(frc_mMdm_boch)
+plot(frc_naive_boch)
+
+```
+Now, I am going to evaluate the forecasts using Mean Absolute Error (MAE) and Mean Absolute Percentage Error (MAPE). Since our forecast horizon is 4, I am going to take first 4 observations from the test set.
+```{r}
+
+MAE_ets_MNM <- mean(abs(data_bo_ch.tst[1:h] - frc_mnm_boch$mean))
+MAE_ets_MAdM <- mean(abs(data_bo_ch.tst[1:h] - frc_mAdm_boch$mean))
+MAE_ets_MMM <- mean(abs(data_bo_ch.tst[1:h] - frc_mmm_boch$mean))
+MAE_ets_MMdM <- mean(abs(data_bo_ch.tst[1:h] - frc_mMdm_boch$mean))
+MAE_ets_Naive <- mean(abs(data_bo_ch.tst[1:h] - frc_naive_boch))
+
+MAE_bo_ch <- c(MAE_ets_MNM, MAE_ets_MAdM, MAE_ets_MMM, MAE_ets_MMdM, MAE_ets_Naive) # Collect them in a single vector
+
+names(MAE_ar_ch) <- c("MNM","MAdM","MMM","MMdM","Naive")
+round(MAE_ar_ch, 3) # round to 3rd decimal point
+
+```
+```{r}
+which.min(MAE_bo_ch)
+```
+
+```{r}
+MAPE_ets_MNM <- mean(abs((data_bo_ch.tst[1:h] - frc_mnm_arch$mean)/data_bo_ch.tst[1:h]))
+MAPE_ets_MAdm <- mean(abs((data_bo_ch.tst[1:h] - frc_mAdm_arch$mean)/data_bo_ch.tst[1:h]))
+MAPE_ets_MMM <- mean(abs((data_bo_ch.tst[1:h] - frc_mmm_arch$mean)/data_bo_ch.tst[1:h]))
+MAPE_ets_MMdM <- mean(abs((data_bo_ch.tst[1:h] - frc_mMdm_arch$mean)/data_bo_ch.tst[1:h]))
+MAPE_ets_Naive <- mean(abs((data_bo_ch.tst[1:h] - frc_naive_arch)/data_bo_ch.tst[1:h]))
+
+MAPE_bo_ch <- c(MAPE_ets_MNM, MAPE_ets_MAdm, MAPE_ets_MMM, MAPE_ets_MMdM, MAPE_ets_Naive) # Collect them in a single vector
+
+names(MAPE_bo_ch) <- c("MAM","MAdM","MMM","MMdM","Naive")
+round(MAPE_bo_ch, 3) # round to 3rd decimal point
+```
+
+```{r}
+which.min(MAPE_bo_ch)
+```
+According to MAE and MAPE, 5th model which uses Naive produces the best forecast with least error
+```{r}
+frc_ets_bo_ch <- frc_mMdm_boch$mean
+MAPE_ets_bo_ch <- MAPE_ets_Naive
+```
+#### Building the Model using OLS
+
+Initially, I am going to plot training data
+```{r}
+plot(data_bo_ch.trn)
+```
+```{r}
+decomposed <- decompose(data_bo_ch.trn)
+```
+```{r}
+plot(decomposed$seasonal, main = "Seasonal Component")
+```
+We can see that the data has multiplicative seasonality. It is not good for the regression modelling. So, I am going to convert the data in logarithms and do the regression.
+```{r}
+data_bo_ch.trn_log <- log(data_bo_ch.trn)
+plot(data_bo_ch.trn_log)
+
+```
+
+Now, the seasonality becomes additive. Now, I am going to build the OLS model using lags. So, I am going to find the lag-structure of the time series. I am doing this by using both PACF (Partial AutoCorrelation Function).
+```{r}
+pacf(log(data_bo_ch.trn_log))
+
+```
+#### According to PACF, we can see that the lags 1, 3, 4 and 5 are significant which may be helpful inputs for a regression model. Now, I am going to construct lags. Initially, I am going to get total number of observations in the training set.
+```{r}
+n <- length(data_bo_ch.trn_log)
+n
+
+```
+
+### I am going to create regression with 7 lags. For this, I am going to create an array with NA (Non-Arithmetic) values having n rows and 8 columns. One column is for the target and all other 7 columns for the lags.
+```{r}
+X_bo_ch <- array(NA, c(n, 8))
+
+for (i in 1:8){
+X_bo_ch[i:n,i] <- log(data_bo_ch.trn_log)[1:(n-i+1)]
+}
+
+# Name the columns
+colnames(X_bo_ch) <- c("Bolivia", paste0("lag",1:7))
+
+X_bo_ch[1:10,]
+```
+Now, I am getting the last 10 rows.
+```{r}
+X_bo_ch[(n-9):n,]
+
+```
+
+```{r}
+X_bo_ch <- as.data.frame(X_bo_ch)
+plot(X_bo_ch)
+```
+
+We can see from the scatter plot that it looks linear. Now, I am going to do regression using the complete model and the stepwise selection.
+```{r}
+# The complete model
+summary(lm(Bolivia ~., data=X_bo_ch))
+
+```
+## We can see lag 1, 4 and 5 looks significant. Now, I am going to do regression using stepwise. But, it will throw error because of the NA values. We have to resolve this issue before running the stepwise model.
+```{r}
+# Find NA in X
+idx <- is.na(X_bo_ch)
+# The result is logical TRUE/FALSE values
+idx[1:10,]
+
+```
+
+```{r}
+# Finding NA value count in each row.
+idx <- rowSums(idx)
+
+# Getting the row indexes which does not contains any NA values.
+idx <- idx == 0
+idx
+```
+
+
+Now, I am going to build the stepwise regression model after removing the redundant data.
+
+```{r}
+# The stepwise model
+fit_temp <- lm(Bolivia~., data=X_bo_ch[idx,])
+
+fit5_bo_ch <- step(fit_temp)
+
+```
+
+```{r}
+# The stepwise model suggests lags 1, 4 , 5, 6 and 7  as significant. Now, I am going to do forecasting the model using the test set. I am going to forecast for the period from t + 1 to t+4.
+
+frc5_bo_ch <- array(NA,c(4,1))
+for (i in 1:4){
+# For the Xnew we use the last 7 observations as before
+Xnew <- tail(data_bo_ch.trn, 7)
+# Add to that the forecasted values
+Xnew <- c(Xnew, frc5_bo_ch)
+
+# Take the relevant 7 values. The index i helps us to get the right ones
+Xnew <- Xnew[i:(6+i)]
+# If i = 1 then this becomes Xnew[1:7].
+# If i = 2 then this becomes Xnew[2:8] - just as the example above.
+# Reverse the order
+Xnew <- Xnew[7:1]
+# Make Xnew an array and name the inputs
+Xnew <- array(Xnew, c(1,7)) # c(1,7) are the dimensions of the array
+colnames(Xnew) <- paste0("lag",1:7) # I have already reversed the order
+# Convert to data.frame
+Xnew <- as.data.frame(Xnew)
+# Forecast
+frc5_bo_ch[i] <- predict(fit5_bo_ch, Xnew)
+}
+frc5_bo_ch
+
+```
+
+Now, I am going to forecast using dummy variables, since there is seasonality for the data.
+```{r}
+length(data_bo_ch.trn)/4
+
+```
+
+Since the training data has 21 years, I am creating dummy variables for 21 years for each quarters.
+```{r}
+D <- rep(1:4, 21) # Replicate 1:4 21 times
+D <- factor(D)
+factor(rep(c("Q1","Q2","Q3","Q4"), 21))
+
+```
+Now, I am going to bind the dummies with the lags in X.
+
+
+```{r}
+D <- rep(1:4, length.out = nrow(X_bo_ch))
+
+# Bind the dummies with the lags in X_ch_ar
+X2_bo_ch <- cbind(X_bo_ch, D)
+colnames(X2_bo_ch) <- c(colnames(X_bo_ch)[1:8], "D")
+X2_bo_ch
+```
+
+Now, I am going to build the regression using all the seven lags.
+```{r}
+summary(lm(Bolivia ~.,data=X2_bo_ch))
+```
+
+## We can see  lag1, lag4, and lag5 have very low p-values indicating that they are likely to be statistically significant.lag2, lag3, lag6, and lag7 have higher p-values, suggesting that their coefficients may not be significantly different from zero. Now, I am going to do regression using stepwise. But, it will throw error because of the NA values. We have to resolve this issue before running the stepwise model.
+```{r}
+# Find NA in X2
+idx <- is.na(X2_bo_ch)
+# The result is logical TRUE/FALSE values
+idx[1:10,]
+
+```
+```{r}
+# Finding NA value count in each row.
+idx <- rowSums(idx)
+
+# Getting the row indexes which does not contains any NA values.
+idx <- idx == 0
+idx
+```
+
+Now, I am going to build the stepwise regression model after removing the redundant data.
+# The stepwise model
+```{r}
+fit_temp <- lm(Bolivia~., data=X2_bo_ch[idx,])
+
+fit6_bo_ch <- step(fit_temp)
+
+
+```
+We can see that the model got lag1, lag4, lag5, lag6,lag7 . Now, I am going to compare the AIC of this model with the Autoregressive OLS model we got before.
+```{r}
+c(AIC(fit5_bo_ch), AIC(fit6_bo_ch))
+
+```
+```{r}
+fit6_bo_ch
+```
+
+## We can see that the model using the dummy variable and other performs same. Now, I am going to forecast the model using the out-sample data. I am going to forecast for the period from t + 1 to t+4.
+
+```{r}
+frc6_bo_ch <- numeric(4)  # Initialize the forecast vector
+
+for (i in 1:4) {
+  # For Xnew, use the last 7 observations as before
+  Xnew <- tail(data_bo_ch.trn, 7)
+  
+  # Take the relevant 7 values. The index i helps us to get the right ones
+  Xnew <- Xnew[i:(6 + i)]
+  
+  # Remove NAs from lag variables
+  Xnew <- na.omit(Xnew)
+  
+  # Reverse the order of Xnew to match the order of lag variables
+  Xnew <- rev(Xnew)
+  
+  # Make Xnew an array and name the inputs
+  Xnew <- array(Xnew, c(1, 7))
+  colnames(Xnew) <- paste0("lag", 1:7)
+  
+  # Create the value of the dummy
+  D <- i
+  Xnew <- cbind(Xnew, D)
+  
+  # Convert to data.frame
+  Xnew <- as.data.frame(Xnew)
+  
+  # Print Xnew to investigate
+  print(Xnew)
+  
+  # Forecast
+  frc6_bo_ch[i] <- predict(fit6_bo_ch, newdata = Xnew)
+}
+
+frc6_bo_ch
+
+
+```
+
+```{r}
+frc6_bo_ch <- numeric(4)  # Initialize the forecast vector
+
+for (i in 1:4) {
+  # For Xnew, use the last 7 observations as before
+  Xnew <- tail(data_bo_ch.trn, 7)
+  
+  # Take the relevant 7 values. The index i helps us to get the right ones
+  Xnew <- Xnew[i:(6 + i)]
+  
+  # Remove NAs from lag variables
+  Xnew <- na.omit(Xnew)
+  
+  # Reverse the order of Xnew to match the order of lag variables
+  Xnew <- rev(Xnew)
+  
+  # Make Xnew an array and name the inputs
+  Xnew <- array(Xnew, c(1, 7))
+  colnames(Xnew) <- paste0("lag", 1:7)
+  
+  # Create the value of the dummy
+  D <- i
+  Xnew <- cbind(Xnew, D)
+  
+  # Convert to data.frame
+  Xnew <- as.data.frame(Xnew)
+  
+  # Print Xnew to investigate
+  print(Xnew)
+  
+  # Forecast
+  frc6_bo_ch[i] <- predict(fit6_bo_ch, newdata = Xnew)
+}
+
+frc6_bo_ch
+
+```
+
+Now, I am going to model in differences. Initially, I am going to retain the data without lags
+```{r}
+X3_bo_ch <- X_bo_ch
+```
+
+Now, I am going to calculate differences for each column.
+```{r}
+# The function ncol() counts how many columns
+for (i in 1:ncol(X3_bo_ch)){
+X3_bo_ch[,i] <- c(NA,diff(X3_bo_ch[,i]))
+}
+
+print(X3_bo_ch)
+```
+
+Now, I am going to build the regression using all the 7 lags
+```{r}
+summary(lm(Bolivia ~., data=X3_bo_ch))
+
+```
+
+We can see that only lag 1,2 and 4 looks significant. Now, I am going to do stepwise regression model. But, it will throw error because of the NA values. We have to resolve this issue before running the stepwise model.
+```{r}
+idx <- is.na(X3_bo_ch)
+idx[1:10,]
+
+```
+
+
+```{r}
+# Finding NA value count in each row.
+idx <- rowSums(idx)
+
+# Getting the row indexes which does not contains any NA values.
+idx <- idx == 0
+idx
+```
+
+Now, I am going to build the stepwise regression model after removing the redundant data.
+```{r}
+# The stepwise model
+fit_temp <- lm(Bolivia~., data=X3_bo_ch[idx,])
+
+fit7_bo_ch <- step(fit_temp)
+```
+
+We can see that the model got the lags 1,4,6 and lag7. We cannot use AIC here, since AIC cannot be applicable to the differenced data. Now, I am going to produce the forecasts.
+```{r}
+frc7_bo_ch <- array(NA,c(4,1))
+for (i in 1:4){
+# Calculate the differences of the in-sample data
+data_bo_ch.diff <- diff(data_bo_ch.trn)
+# Create lags - same as before
+Xnew <- tail(data_bo_ch.diff, 7)
+Xnew <- c(Xnew, frc7_bo_ch)
+Xnew <- Xnew[i:(6+i)]
+Xnew <- Xnew[7:1]
+Xnew <- array(Xnew, c(1,7))
+colnames(Xnew) <- paste0("lag",1:7)
+Xnew <- as.data.frame(Xnew)
+# Forecast
+frc7_bo_ch[i] <- predict(fit7_bo_ch, Xnew)
+}
+
+frc7_bo_ch
+
+```
+
+The forecast we got are in differences. To compare with other models, I am going to reverse the differences.
+```{r}
+frc7_bo_ch <- cumsum(c(tail(data_bo_ch.trn, 1), frc7_bo_ch))
+frc7_bo_ch <- frc7_bo_ch[-1]
+frc7_bo_ch
+
+```
+
+Now, I am going to build and forecast lasso regression
+```{r}
+# I remove the first 7 rows by that contain NAs
+# For the explanatories I remove the first column
+
+xx_bo_ch <- as.matrix(X_bo_ch[-(1:7),-1])
+# For the target I retain only the first column
+yy_bo_ch <- as.matrix(X_bo_ch[-(1:7),1])
+
+fit8_bo_ch <- cv.glmnet(x=xx_bo_ch, y=yy_bo_ch)
+```
+
+
+
+```{r}
+frc_lasso_boch <- array(NA,c(4,1))
+for (i in 1:4){
+# Create inputs - note for lasso we do not transform these into data.frame
+Xnew <- c(tail(data_bo_ch.trn,7), frc_lasso_boch)
+Xnew <- (Xnew[i:(6+i)])[7:1]
+Xnew <- array(Xnew, c(1,7))
+colnames(Xnew) <- paste0("lag",1:7)
+
+# Forecast
+frc_lasso_boch[i] <- predict(fit8_bo_ch, Xnew)
+}
+
+frc_lasso_boch
+```
+Now, I am going to build and forecast ridge regression
+```{r}
+fit_ridge_boch <- cv.glmnet(x=xx_bo_ch, y=yy_bo_ch, alpha=0)
+
+```
+
+```{r}
+frc_ridge_boch <- array(NA,c(4,1))
+for (i in 1:4){
+# Create inputs - note for lasso we do not transform these into data.frame
+Xnew <- c(tail(data_bo_ch.trn,7), frc_ridge_boch)
+Xnew <- (Xnew[i:(6+i)])[7:1]
+Xnew <- array(Xnew, c(1,7))
+colnames(Xnew) <- paste0("lag",1:7)
+
+# Forecast
+frc_ridge_boch[i] <- predict(fit_ridge_boch, Xnew)
+}
+
+frc_ridge_boch
+```
+
+
+Now, I am going to plot all the five models.
+```{r}
+frc_ets_bo_ch <- ts(frc_ets_bo_ch, frequency=frequency(data_bo_ch.tst), start=start(data_bo_ch.tst))
+frc5_bo_ch <- ts(frc5_bo_ch, frequency=frequency(data_bo_ch.tst), start=start(data_bo_ch.tst))
+frc6_bo_ch <- ts(frc6_bo_ch, frequency=frequency(data_bo_ch.tst), start=start(data_bo_ch.tst))
+frc7_bo_ch <- ts(frc7_bo_ch, frequency=frequency(data_bo_ch.tst), start=start(data_bo_ch.tst))
+frc_lasso_boch <- ts(frc_lasso_boch, frequency=frequency(data_bo_ch.tst), start=start(data_bo_ch.tst))
+frc_ridge_boch <- ts(frc_ridge_boch, frequency=frequency(data_bo_ch.tst), start=start(data_bo_ch.tst))
+ts.plot(data_bo_ch.trn, data_bo_ch.tst, frc_ets_bo_ch, frc5_bo_ch, frc6_bo_ch, frc7_bo_ch, frc_lasso_boch, frc_ridge_boch, col=c("black","black","orange","red","blue","green","yellow","brown"))
+legend("topleft",c("ETS-best", "OLS-Auto","OLS-Dummies","OLS-Difference","Lasso","Ridge"),col=c("orange","red","blue","green","yellow","brown"),lty=1)
+title("Toursim flow from Bolivia to Chile")
+
+```
+
+
+```{r}
+# Create a data frame with model names and forecast values
+forecast_table <- data.frame(
+  Model = c("ETS-best", "Autoregressive", "Dummies", "Difference", "Lasso", "Ridge"),
+  Qtr1 = c(frc_ets_bo_ch[1], frc5_bo_ch[1], frc6_bo_ch[1], frc7_bo_ch[1], frc_lasso_boch[1], frc_ridge_boch[1]),
+  Qtr2 = c(frc_ets_bo_ch[2], frc5_bo_ch[2], frc6_bo_ch[2], frc7_bo_ch[2], frc_lasso_boch[2], frc_ridge_boch[2]),
+  Qtr3 = c(frc_ets_bo_ch[3], frc5_bo_ch[3], frc6_bo_ch[3], frc7_bo_ch[3], frc_lasso_boch[3], frc_ridge_boch[3]),
+  Qtr4 = c(frc_ets_bo_ch[4], frc5_bo_ch[4], frc6_bo_ch[4], frc7_bo_ch[4], frc_lasso_boch[4], frc_ridge_boch[4])
+)
+
+# Print the forecast table
+print(forecast_table)
+
+```
+Now, I am going to evaluate all the OLS models together with the ETS models using Mean Absolute Error (MAE) and Mean Absolute Percentage Error (MAPE).
+```{r}
+
+
+# Calculate Mean Absolute Error (MAE) for each model
+MAE_ets_MNM <- mean(abs(data_bo_ch.tst[1:h] - frc_mnm_boch$mean))
+MAE_ets_MAdM <- mean(abs(data_bo_ch.tst[1:h] - frc_mAdm_boch$mean))
+MAE_ets_MMM <- mean(abs(data_bo_ch.tst[1:h] - frc_mmm_boch$mean))
+MAE_ets_MMdM <- mean(abs(data_bo_ch.tst[1:h] - frc_mMdm_boch$mean))
+MAE_ets_Naive <- mean(abs(data_bo_ch.tst[1:h] - frc_naive_boch))
+
+
+mae_ets <- mean(abs(data_bo_ch.tst - frc_ets_bo_ch))
+mae_autoregressive <- mean(abs(data_bo_ch.tst - frc5_bo_ch))
+mae_dummies <- mean(abs(data_bo_ch.tst - frc6_bo_ch))
+mae_difference <- mean(abs(data_bo_ch.tst - frc7_bo_ch))
+mae_lasso <- mean(abs(data_bo_ch.tst - frc_lasso_boch))
+mae_ridge <- mean(abs(data_bo_ch.tst - frc_ridge_boch))
+
+# Create a data frame for comparison
+mae_table <- data.frame(
+  Model = c("ETS-MNM", "ETS-MAdM", "ETS-MMM", "ETS-MMdM", "ETS-Naive", "OLS-Auto", "OLS-Dummies", "OLS-Difference", "Lasso", "Ridge"),
+  MAE = c(MAE_ets_MNM,MAE_ets_MAdM,MAE_ets_MMM,MAE_ets_MMdM,MAE_ets_Naive, mae_autoregressive, mae_dummies, mae_difference, mae_lasso, mae_ridge)
+)
+
+# Print the MAE comparison table
+print(mae_table)
+
+```
+
+```{r}
+class(data_bo_ch.tst)
+class(frc_mnm_boch)
+str(frc_naive_boch)
+```
+
+```{r}
+# Extract the forecast values
+frc_mnm_boch_values <- as.numeric(frc_mnm_boch$mean)
+frc_mAdm_boch_values <- as.numeric(frc_mAdm_boch$mean)
+frc_mmm_boch_values <- as.numeric(frc_mmm_boch$mean)
+frc_mMdm_boch_values <- as.numeric(frc_mMdm_boch$mean)
+frc_naive_boch_values <- as.numeric(frc_naive_boch)
+frc5_bo_ch_values <- as.numeric(frc5_bo_ch)
+frc6_bo_ch_values <- as.numeric(frc6_bo_ch)
+frc7_bo_ch_values <- as.numeric(frc7_bo_ch)
+frc_lasso_boch_values <- as.numeric(frc_lasso_boch)
+frc_ridge_boch_values <- as.numeric(frc_ridge_boch)
+
+
+# Print the forecast values
+print(frc_mnm_boch_values)
+print(frc_mAdm_boch_values)
+print(frc_mmm_boch_values)
+print(frc_mMdm_boch_values)
+print(frc_naive_boch_values)
+print(frc5_bo_ch_values)
+print(frc6_bo_ch_values)
+print(frc7_bo_ch_values)
+print(frc_lasso_boch_values)
+print(frc_ridge_boch_values)
+```
+```{r}
+# Calculate MAPE for each model
+MAPE_ets_mnm <- mean(abs((data_bo_ch.tst - frc_mnm_boch_values) / data_bo_ch.tst) * 100, na.rm = TRUE)
+MAPE_ets_madm <- mean(abs((data_bo_ch.tst - frc_mAdm_boch_values) / data_bo_ch.tst) * 100, na.rm = TRUE)
+MAPE_ets_mmm <- mean(abs((data_bo_ch.tst - frc_mmm_boch_values) / data_bo_ch.tst) * 100, na.rm = TRUE)
+MAPE_ets_mmdm <- mean(abs((data_bo_ch.tst - frc_mMdm_boch_values) / data_bo_ch.tst) * 100, na.rm = TRUE)
+MAPE_ets_naive <- mean(abs((data_bo_ch.tst - frc_naive_boch_values) / data_bo_ch.tst) * 100, na.rm = TRUE)
+MAPE_ols_auto <- mean(abs((data_bo_ch.tst - frc5_bo_ch_values) / data_bo_ch.tst) * 100, na.rm = TRUE)
+MAPE_ols_dummies <- mean(abs((data_bo_ch.tst - frc6_bo_ch_values) / data_bo_ch.tst) * 100, na.rm = TRUE)
+MAPE_ols_diff <- mean(abs((data_bo_ch.tst - frc7_bo_ch_values) / data_bo_ch.tst) * 100, na.rm = TRUE)
+MAPE_lasso <- mean(abs((data_bo_ch.tst - frc_lasso_boch_values) / data_bo_ch.tst) * 100, na.rm = TRUE)
+MAPE_ridge <- mean(abs((data_bo_ch.tst - frc_ridge_boch_values) / data_bo_ch.tst) * 100, na.rm = TRUE)
+
+# Create a vector of MAPE values
+MAPE_values <- c(MAPE_ets_mnm, MAPE_ets_madm, MAPE_ets_mmm, MAPE_ets_mmdm, MAPE_ets_naive, MAPE_ols_auto, MAPE_ols_dummies, MAPE_ols_diff, MAPE_lasso, MAPE_ridge)
+
+# Create a vector of model names
+model_names <- c("ETS-MNM", "ETS-MAdM", "ETS-MMM", "ETS-MMdM", "ETS-Naive", "OLS-Auto", "OLS-Dummies", "OLS-Diff", "Lasso", "Ridge")
+
+# Combine the model names and MAPE values into a data frame
+mape_df <- data.frame(Model = model_names, MAPE = MAPE_values)
+
+# Print the MAPE values
+print(mape_df)
+
+```
+```{r}
+# Assuming MAE_df and MAPE_df have the same number of rows
+combined_df <- cbind(mae_table, mape_df)
+
+# Alternatively, using data.frame
+combined_df <- data.frame(mae_table, mape_df)
+combined_df
+```
+From the results, we can see that the Lasso model performed best when compared to all other models.
+
+### Forecasting tourism flow from Peru to Chile
+
+```{r}
+
+# Getting the values for the origin Peru.
+data_pe_ch <- data_ch[,4]
+print(data_pe_ch)
+```
+
+
+```{r}
+## #### Creating Train and Test Data
+# Taking year 2019 data as the test data
+data_pe_ch.tst <- window(data_pe_ch, frequency=4, start=c(2019, 1))
+print('Test Data')
+print(data_pe_ch.tst)
+
+# Rest of the data is taken as training data
+data_pe_ch.trn <- window(data_pe_ch, frequency=4, end=c(2018, 4))
+print('Training Data')
+print(data_pe_ch.trn)
+```
+```{r}
+#### Exploring the time series
+plot(data_pe_ch, ylab="Toursim flow from Peru to Chile")
+```
+#Here, I am going to calculate Central Moving Average and plot it
+```{r}
+cma_pe_ch <- cmav(data_pe_ch.trn, outplot=1)
+title(main="Tourism flow from Peru to Chile")
+```
+Now, I am going to plot the seasonal plot.
+```{r}
+# Plotting the seasonal plot
+seasplot(data_pe_ch.trn)
+
+# Plotting the seasonal boxplot
+seasplot(data_pe_ch.trn, outplot=2)
+
+# Plotting the seasonal subseries plot
+seasplot(data_pe_ch.trn,outplot=3)
+```
+Results of statistical testing
+Evidence of trend: TRUE  (pval: 0)
+Evidence of seasonality: TRUE  (pval: 0)
+
+
+
+From the plots, we can see model has both trend and multiplicative seasonality. Now, I am going to decompose the time series.
+```{r}
+# Decomposing the time series
+dc_pe_ch <- decomp(data_pe_ch.trn,outplot=1)
+
+```
+```{r}
+# Load necessary libraries
+library(ggplot2)
+
+# Apply additive decomposition
+decomp_additive <- decompose(data_pe_ch, type = "additive")
+
+# Apply multiplicative decomposition
+decomp_multiplicative <- decompose(data_pe_ch, type = "multiplicative")
+
+# Plot the decomposed components
+par(mfrow = c(3, 3))  # Set up a 3x3 grid for the plots
+
+# Original time series
+plot(data_pe_ch, main = "Original Time Series", col = "blue")
+
+# Additive decomposition components
+plot(decomp_additive$trend, main = "Additive Trend", col = "red")
+plot(decomp_additive$seasonal, main = "Additive Seasonal", col = "green")
+plot(decomp_additive$random, main = "Additive Residuals", col = "purple")
+
+# Multiplicative decomposition components
+plot(decomp_multiplicative$trend, main = "Multiplicative Trend", col = "red")
+plot(decomp_multiplicative$seasonal, main = "Multiplicative Seasonal", col = "green")
+plot(decomp_multiplicative$random, main = "Multiplicative Residuals", col = "purple")
+
+# Reset the plotting layout
+par(mfrow = c(1, 1))
+```
+
+#### Building the Model using Exponential Smoothing
+
+Initially, I am going to forecast the timeseries using information criteria without explicitly specifying ETS model.
+
+
+```{r}
+fit_pe_ch <- ets(data_pe_ch.trn)
+fit_pe_ch
+
+```
+Here, we can see ETS(A,A,A) is chosen as the best model. Now, I am going to construct the forecasting model by preselecting the exponential smoothing type. Since, there is trend and seasonality, I am going to build ETS(M,Ad,M), ETS(M,M,M) and ETS(M,Md,M)
+```{r}
+fit1_pe_ch <- ets(data_pe_ch.trn, model="MAM", damped=TRUE)
+fit2_pe_ch <- ets(data_pe_ch.trn, model="MMM", damped=FALSE)
+fit3_pe_ch <- ets(data_pe_ch.trn, model="MMM", damped=TRUE)
+```
+
+Now, I am going to get the ETS model with best AICc.
+```{r}
+aicc <- c(fit_pe_ch$aicc,fit1_pe_ch$aicc, fit2_pe_ch$aicc, fit3_pe_ch$aicc)
+names(aicc) <- c("AAA","MAdM","MMM","MMdM")
+aicc
+
+```
+```{r}
+
+which.min(aicc)
+```
+We can see that the first model where smoothing type is selected automatically gives the best AICc. Now, I am going to forecast these fours models and Naive model.
+#### Forecasting the time series
+
+Here, I am going to forecast the fours models we build and the Naive model. Since the test set is only for one year, I am going to do single origin evaluation.
+```{r}
+# Forecast period is defined as 4, since we are forecasting for the next 4 quarters of 2019
+h <- 4
+
+# Forcasting all the models
+frc_AAA_pech <- forecast(fit_pe_ch, h=h)
+frc_mAdm_pech <- forecast(fit1_pe_ch, h=h)
+frc_mmm_pech <- forecast(fit2_pe_ch, h=h)
+frc_mMdm_pech <- forecast(fit3_pe_ch, h=h)
+
+# And the naive:
+frc_naive_pech <- tail(data_pe_ch.trn, frequency(data_pe_ch.trn))[1:h] # that is copy the last season
+
+```
+Now, I am plotting forecasts of all the models below.
+```{r}
+plot(frc_AAA_pech)
+plot(frc_mAdm_pech)
+plot(frc_mmm_pech)
+plot(frc_mMdm_pech)
+plot(frc_naive_pech)
+
+```
+Now, I am going to evaluate the forecasts using Mean Absolute Error (MAE) and Mean Absolute Percentage Error (MAPE). Since our forecast horizon is 4, I am going to take first 4 observations from the test set.
+```{r}
+
+MAE_ets_MNM <- mean(abs(data_pe_ch.tst[1:h] - frc_AAA_pech$mean))
+MAE_ets_MAdM <- mean(abs(data_pe_ch.tst[1:h] - frc_mAdm_pech$mean))
+MAE_ets_MMM <- mean(abs(data_pe_ch.tst[1:h] - frc_mmm_pech$mean))
+MAE_ets_MMdM <- mean(abs(data_pe_ch.tst[1:h] - frc_mMdm_pech$mean))
+MAE_ets_Naive <- mean(abs(data_pe_ch.tst[1:h] - frc_naive_pech))
+
+MAE_pe_ch <- c(MAE_ets_MNM, MAE_ets_MAdM, MAE_ets_MMM, MAE_ets_MMdM, MAE_ets_Naive) # Collect them in a single vector
+
+names(MAE_pe_ch) <- c("AAA","MAdM","MMM","MMdM","Naive")
+round(MAE_pe_ch, 3) # round to 3rd decimal point
+
+```
+```{r}
+which.min(MAE_pe_ch)
+```
+
+```{r}
+MAPE_ets_AAA <- mean(abs((data_pe_ch.tst[1:h] - frc_AAA_pech$mean)/data_pe_ch.tst[1:h]))
+MAPE_ets_MAdm <- mean(abs((data_pe_ch.tst[1:h] - frc_mAdm_pech$mean)/data_pe_ch.tst[1:h]))
+MAPE_ets_MMM <- mean(abs((data_pe_ch.tst[1:h] - frc_mmm_pech$mean)/data_pe_ch.tst[1:h]))
+MAPE_ets_MMdM <- mean(abs((data_pe_ch.tst[1:h] - frc_mMdm_pech$mean)/data_pe_ch.tst[1:h]))
+MAPE_ets_Naive <- mean(abs((data_pe_ch.tst[1:h] - frc_naive_pech)/data_pe_ch.tst[1:h]))
+
+MAPE_pe_ch <- c(MAPE_ets_MNM, MAPE_ets_MAdm, MAPE_ets_MMM, MAPE_ets_MMdM, MAPE_ets_Naive) # Collect them in a single vector
+
+names(MAPE_pe_ch) <- c("AAA","MAdM","MMM","MMdM","Naive")
+round(MAPE_pe_ch, 3) # round to 3rd decimal point
+```
+
+```{r}
+which.min(MAPE_pe_ch)
+```
+According to MAE and MAPE, first model which uses AAA produces the best forecast with least error
+```{r}
+frc_ets_pe_ch <- frc_AAA_pech$mean
+MAPE_ets_pe_ch <- MAPE_ets_AAA
+```
+#### Building the Model using OLS
+
+Initially, I am going to plot training data
+```{r}
+plot(data_pe_ch.trn)
+```
+```{r}
+decomposed <- decompose(data_pe_ch.trn)
+```
+```{r}
+
+plot(decomposed$seasonal, main = "Seasonal Component")
+```
+We can see that the data has multiplicative seasonality. It is not good for the regression modelling. So, I am going to convert the data in logarithms and do the regression.
+```{r}
+data_pe_ch.trn_log <- log(data_pe_ch.trn)
+plot(data_pe_ch.trn_log)
+
+```
+
+Now, the seasonality becomes additive. Now, I am going to build the OLS model using lags. So, I am going to find the lag-structure of the time series. I am doing this by using both PACF (Partial AutoCorrelation Function).
+```{r}
+pacf(log(data_pe_ch.trn_log))
+
+```
+#### According to PACF, we can see that the lags 1, 2, 4, 5 and 7 are significant which may be helpful inputs for a regression model. Now, I am going to construct lags. Initially, I am going to get total number of observations in the training set.
+```{r}
+n <- length(data_pe_ch.trn_log)
+n
+
+```
+
+### I am going to create regression with 7 lags. For this, I am going to create an array with NA (Non-Arithmetic) values having n rows and 8 columns. One column is for the target and all other 7 columns for the lags.
+```{r}
+X_pe_ch <- array(NA, c(n, 8))
+
+for (i in 1:8){
+X_pe_ch[i:n,i] <- log(data_pe_ch.trn_log)[1:(n-i+1)]
+}
+
+# Name the columns
+colnames(X_pe_ch) <- c("Peru", paste0("lag",1:7))
+
+X_pe_ch[1:10,]
+```
+Now, I am getting the last 10 rows.
+```{r}
+X_pe_ch[(n-9):n,]
+
+```
+
+```{r}
+X_pe_ch <- as.data.frame(X_pe_ch)
+plot(X_pe_ch)
+```
+
+We can see from the scatter plot that it looks linear. Now, I am going to do regression using the complete model and the stepwise selection.
+```{r}
+# The complete model
+summary(lm(Peru ~., data=X_pe_ch))
+
+```
+## We can see  lag 1, 3,4,5 and 7 looks significant. Now, I am going to do regression using stepwise. But, it will throw error because of the NA values. We have to resolve this issue before running the stepwise model.
+```{r}
+# Find NA in X
+idx <- is.na(X_pe_ch)
+# The result is logical TRUE/FALSE values
+idx[1:10,]
+
+```
+
+```{r}
+
+# Finding NA value count in each row.
+idx <- rowSums(idx)
+
+# Getting the row indexes which does not contains any NA values.
+idx <- idx == 0
+idx
+```
+
+
+Now, I am going to build the stepwise regression model after removing the redundant data.
+
+```{r}
+# The stepwise model
+fit_temp <- lm(Peru~., data=X_pe_ch[idx,])
+
+fit5_pe_ch <- step(fit_temp)
+
+```
+
+```{r}
+# The stepwise model suggests lags 1, 3,4 ,5 and 7  as significant. Now, I am going to do forecasting the model using the test set. I am going to forecast for the period from t + 1 to t+4.
+frc5_pe_ch <- array(NA,c(4,1))
+for (i in 1:4){
+# For the Xnew we use the last 7 observations as before
+Xnew <- tail(data_pe_ch.trn, 7)
+# Add to that the forecasted values
+Xnew <- c(Xnew, frc5_pe_ch)
+
+# Take the relevant 7 values. The index i helps us to get the right ones
+Xnew <- Xnew[i:(6+i)]
+# If i = 1 then this becomes Xnew[1:7].
+# If i = 2 then this becomes Xnew[2:8] - just as the example above.
+# Reverse the order
+Xnew <- Xnew[7:1]
+# Make Xnew an array and name the inputs
+Xnew <- array(Xnew, c(1,7)) # c(1,7) are the dimensions of the array
+colnames(Xnew) <- paste0("lag",1:7) # I have already reversed the order
+# Convert to data.frame
+Xnew <- as.data.frame(Xnew)
+# Forecast
+frc5_pe_ch[i] <- predict(fit5_pe_ch, Xnew)
+}
+frc5_pe_ch
+
+```
+
+Now, I am going to forecast using dummy variables, since there is seasonality for the data.
+```{r}
+length(data_pe_ch.trn)/4
+
+```
+
+Since the training data has 21 years, I am creating dummy variables for 21 years for each quarters.
+```{r}
+D <- rep(1:4, 21) # Replicate 1:4 21 times
+D <- factor(D)
+factor(rep(c("Q1","Q2","Q3","Q4"), 21))
+
+```
+Now, I am going to bind the dummies with the lags in X.
+
+
+```{r}
+D <- rep(1:4, length.out = nrow(X_pe_ch))
+
+# Bind the dummies with the lags in X_ch_ar
+X2_pe_ch <- cbind(X_pe_ch, D)
+colnames(X2_pe_ch) <- c(colnames(X_pe_ch)[1:8], "D")
+X2_pe_ch
+```
+
+Now, I am going to build the regression using all the seven lags.
+```{r}
+summary(lm(Peru ~.,data=X2_pe_ch))
+```
+
+## We can see  lag1, lag3,lag4,lag5 and lag7 have very low p-values indicating that they are likely to be statistically significant.lag2, and lag6 have higher p-values, suggesting that their coefficients may not be significantly different from zero. Now, I am going to do regression using stepwise. But, it will throw error because of the NA values. We have to resolve this issue before running the stepwise model.
+```{r}
+# Find NA in X2
+idx <- is.na(X2_pe_ch)
+# The result is logical TRUE/FALSE values
+idx[1:10,]
+
+```
+```{r}
+# Finding NA value count in each row.
+idx <- rowSums(idx)
+
+# Getting the row indexes which does not contains any NA values.
+idx <- idx == 0
+idx
+```
+
+Now, I am going to build the stepwise regression model after removing the redundant data.
+# The stepwise model
+```{r}
+fit_temp <- lm(Peru~., data=X2_pe_ch[idx,])
+
+fit6_pe_ch <- step(fit_temp)
+
+
+```
+We can see that the model got lag1, lag3, lag4, lag5,lag6. Now, I am going to compare the AIC of this model with the Autoregressive OLS model we got before.
+```{r}
+c(AIC(fit5_pe_ch), AIC(fit6_pe_ch))
+
+```
+```{r}
+fit6_pe_ch
+```
+```{r}
+fit5_pe_ch
+```
+
+## We can see that the model using the dummy variable not performs best. Now, I am going to forecast the model using the out-sample data. I am going to forecast for the period from t + 1 to t+4.
+
+```{r}
+frc6_pe_ch <- numeric(4)  # Initialize the forecast vector
+
+for (i in 1:4) {
+  # For Xnew, use the last 7 observations as before
+  Xnew <- tail(data_pe_ch.trn, 7)
+  
+  # Take the relevant 7 values. The index i helps us to get the right ones
+  Xnew <- Xnew[i:(6 + i)]
+  
+  # Remove NAs from lag variables
+  Xnew <- na.omit(Xnew)
+  
+  # Reverse the order of Xnew to match the order of lag variables
+  Xnew <- rev(Xnew)
+  
+  # Make Xnew an array and name the inputs
+  Xnew <- array(Xnew, c(1, 7))
+  colnames(Xnew) <- paste0("lag", 1:7)
+  
+  # Create the value of the dummy
+  D <- i
+  Xnew <- cbind(Xnew, D)
+  
+  # Convert to data.frame
+  Xnew <- as.data.frame(Xnew)
+  
+  # Print Xnew to investigate
+  print(Xnew)
+  
+  # Forecast
+  frc6_pe_ch[i] <- predict(fit6_pe_ch, newdata = Xnew)
+}
+
+frc6_pe_ch
+
+
+```
+
+```{r}
+frc6_pe_ch <- numeric(4)  # Initialize the forecast vector
+
+for (i in 1:4) {
+  # For Xnew, use the last 7 observations as before
+  Xnew <- tail(data_pe_ch.trn, 7)
+  
+  # Take the relevant 7 values. The index i helps us to get the right ones
+  Xnew <- Xnew[i:(6 + i)]
+  
+  # Remove NAs from lag variables
+  Xnew <- na.omit(Xnew)
+  
+  # Reverse the order of Xnew to match the order of lag variables
+  Xnew <- rev(Xnew)
+  
+  # Make Xnew an array and name the inputs
+  Xnew <- array(Xnew, c(1, 7))
+  colnames(Xnew) <- paste0("lag", 1:7)
+  
+  # Create the value of the dummy
+  D <- i
+  Xnew <- cbind(Xnew, D)
+  
+  # Convert to data.frame
+  Xnew <- as.data.frame(Xnew)
+  
+  # Print Xnew to investigate
+  print(Xnew)
+  
+  # Forecast
+  frc6_pe_ch[i] <- predict(fit6_pe_ch, newdata = Xnew)
+}
+
+frc6_pe_ch
+
+```
+
+Now, I am going to model in differences. Initially, I am going to retain the data without lags
+```{r}
+X3_pe_ch <- X_pe_ch
+```
+
+Now, I am going to calculate differences for each column.
+```{r}
+# The function ncol() counts how many columns
+for (i in 1:ncol(X3_pe_ch)){
+X3_pe_ch[,i] <- c(NA,diff(X3_pe_ch[,i]))
+}
+
+print(X3_pe_ch)
+```
+
+Now, I am going to build the regression using all the 7 lags
+```{r}
+summary(lm(Peru ~., data=X3_pe_ch))
+
+```
+
+We can see that only lag 1,2,3,4,5 and 6 looks significant. Now, I am going to do stepwise regression model. But, it will throw error because of the NA values. We have to resolve this issue before running the stepwise model.
+```{r}
+idx <- is.na(X3_pe_ch)
+idx[1:10,]
+
+```
+
+
+```{r}
+# Finding NA value count in each row.
+idx <- rowSums(idx)
+
+# Getting the row indexes which does not contains any NA values.
+idx <- idx == 0
+idx
+```
+
+Now, I am going to build the stepwise regression model after removing the redundant data.
+```{r}
+# The stepwise model
+fit_temp <- lm(Peru~., data=X3_pe_ch[idx,])
+
+fit7_pe_ch <- step(fit_temp)
+```
+
+We can see that the model got the lags 1,2,3,4,5 and lag 6. We cannot use AIC here, since AIC cannot be applicable to the differenced data. Now, I am going to produce the forecasts.
+```{r}
+frc7_pe_ch <- array(NA,c(4,1))
+for (i in 1:4){
+# Calculate the differences of the in-sample data
+data_pe_ch.diff <- diff(data_pe_ch.trn)
+# Create lags - same as before
+Xnew <- tail(data_pe_ch.diff, 7)
+Xnew <- c(Xnew, frc7_pe_ch)
+Xnew <- Xnew[i:(6+i)]
+Xnew <- Xnew[7:1]
+Xnew <- array(Xnew, c(1,7))
+colnames(Xnew) <- paste0("lag",1:7)
+Xnew <- as.data.frame(Xnew)
+# Forecast
+frc7_pe_ch[i] <- predict(fit7_pe_ch, Xnew)
+}
+
+frc7_pe_ch
+
+```
+
+The forecast we got are in differences. To compare with other models, I am going to reverse the differences.
+```{r}
+frc7_pe_ch <- cumsum(c(tail(data_pe_ch.trn, 1), frc7_pe_ch))
+frc7_pe_ch <- frc7_pe_ch[-1]
+frc7_pe_ch
+
+```
+
+Now, I am going to build and forecast lasso regression
+```{r}
+# I remove the first 7 rows by that contain NAs
+# For the explanatories I remove the first column
+
+xx_pe_ch <- as.matrix(X_pe_ch[-(1:7),-1])
+# For the target I retain only the first column
+yy_pe_ch <- as.matrix(X_pe_ch[-(1:7),1])
+
+fit_lasso_pech <- cv.glmnet(x=xx_pe_ch, y=yy_pe_ch)
+```
+
+
+
+```{r}
+frc_lasso_pech <- array(NA,c(4,1))
+for (i in 1:4){
+# Create inputs - note for lasso we do not transform these into data.frame
+Xnew <- c(tail(data_pe_ch.trn,7), frc_lasso_pech)
+Xnew <- (Xnew[i:(6+i)])[7:1]
+Xnew <- array(Xnew, c(1,7))
+colnames(Xnew) <- paste0("lag",1:7)
+
+# Forecast
+frc_lasso_pech[i] <- predict(fit_lasso_pech, Xnew)
+}
+
+frc_lasso_pech
+```
+Now, I am going to build and forecast ridge regression
+```{r}
+fit_ridge_pech <- cv.glmnet(x=xx_pe_ch, y=yy_pe_ch, alpha=0)
+
+```
+
+```{r}
+frc_ridge_pech <- array(NA,c(4,1))
+for (i in 1:4){
+# Create inputs - note for lasso we do not transform these into data.frame
+Xnew <- c(tail(data_pe_ch.trn,7), frc_ridge_pech)
+Xnew <- (Xnew[i:(6+i)])[7:1]
+Xnew <- array(Xnew, c(1,7))
+colnames(Xnew) <- paste0("lag",1:7)
+
+# Forecast
+frc_ridge_pech[i] <- predict(fit_ridge_pech, Xnew)
+}
+
+frc_ridge_pech
+```
+
+
+Now, I am going to plot all the five models.
+```{r}
+frc_ets_pe_ch <- ts(frc_ets_pe_ch, frequency=frequency(data_pe_ch.tst), start=start(data_pe_ch.tst))
+frc5_pe_ch <- ts(frc5_pe_ch, frequency=frequency(data_pe_ch.tst), start=start(data_pe_ch.tst))
+frc6_pe_ch <- ts(frc6_pe_ch, frequency=frequency(data_pe_ch.tst), start=start(data_pe_ch.tst))
+frc7_pe_ch <- ts(frc7_pe_ch, frequency=frequency(data_pe_ch.tst), start=start(data_pe_ch.tst))
+frc_lasso_pech <- ts(frc_lasso_pech, frequency=frequency(data_pe_ch.tst), start=start(data_pe_ch.tst))
+frc_ridge_pech <- ts(frc_ridge_pech, frequency=frequency(data_pe_ch.tst), start=start(data_pe_ch.tst))
+ts.plot(data_pe_ch.trn, data_pe_ch.tst, frc_ets_pe_ch, frc5_pe_ch, frc6_pe_ch, frc7_pe_ch, frc_lasso_pech, frc_ridge_pech, col=c("black","black","orange","red","blue","green","yellow","brown"))
+legend("topleft",c("ETS-best", "OLS-Auto","OLS-Dummies","OLS-Difference","Lasso","Ridge"),col=c("orange","red","blue","green","yellow","brown"),lty=1)
+title("Toursim flow from Peru to Chile")
+
+```
+
+
+```{r}
+# Create a data frame with model names and forecast values
+forecast_table <- data.frame(
+  Model = c("ETS", "Autoregressive", "Dummies", "Difference", "Lasso", "Ridge"),
+  Qtr1 = c(frc_ets_pe_ch[1], frc5_pe_ch[1], frc6_pe_ch[1], frc7_pe_ch[1], frc_lasso_pech[1], frc_ridge_pech[1]),
+  Qtr2 = c(frc_ets_pe_ch[2], frc5_pe_ch[2], frc6_pe_ch[2], frc7_pe_ch[2], frc_lasso_pech[2], frc_ridge_pech[2]),
+  Qtr3 = c(frc_ets_pe_ch[3], frc5_pe_ch[3], frc6_pe_ch[3], frc7_pe_ch[3], frc_lasso_pech[3], frc_ridge_pech[3]),
+  Qtr4 = c(frc_ets_pe_ch[4], frc5_pe_ch[4], frc6_pe_ch[4], frc7_pe_ch[4], frc_lasso_pech[4], frc_ridge_pech[4])
+)
+
+# Print the forecast table
+print(forecast_table)
+
+```
+Now, I am going to evaluate all the OLS models together with the ETS models using Mean Absolute Error (MAE) and Mean Absolute Percentage Error (MAPE).
+```{r}
+
+
+# Calculate Mean Absolute Error (MAE) for each model
+MAE_ets_AAA <- mean(abs(data_pe_ch.tst[1:h] - frc_AAA_pech$mean))
+MAE_ets_MAdM <- mean(abs(data_pe_ch.tst[1:h] - frc_mAdm_pech$mean))
+MAE_ets_MMM <- mean(abs(data_pe_ch.tst[1:h] - frc_mmm_pech$mean))
+MAE_ets_MMdM <- mean(abs(data_pe_ch.tst[1:h] - frc_mMdm_pech$mean))
+MAE_ets_Naive <- mean(abs(data_pe_ch.tst[1:h] - frc_naive_pech))
+
+
+mae_ets <- mean(abs(data_pe_ch.tst - frc_ets_pe_ch))
+mae_autoregressive <- mean(abs(data_pe_ch.tst - frc5_pe_ch))
+mae_dummies <- mean(abs(data_pe_ch.tst - frc6_pe_ch))
+mae_difference <- mean(abs(data_pe_ch.tst - frc7_pe_ch))
+mae_lasso <- mean(abs(data_pe_ch.tst - frc_lasso_pech))
+mae_ridge <- mean(abs(data_pe_ch.tst - frc_ridge_pech))
+
+# Create a data frame for comparison
+mae_table <- data.frame(
+  Model = c("ETS-AAA", "ETS-MAdM", "ETS-MMM", "ETS-MMdM", "ETS-Naive", "OLS-Auto", "OLS-Dummies", "OLS-Difference", "Lasso", "Ridge"),
+  MAE = c(MAE_ets_MNM,MAE_ets_MAdM,MAE_ets_MMM,MAE_ets_MMdM,MAE_ets_Naive, mae_autoregressive, mae_dummies, mae_difference, mae_lasso, mae_ridge)
+)
+
+# Print the MAE comparison table
+print(mae_table)
+
+```
+
+```{r}
+class(data_pe_ch.tst)
+class(frc_AAA_pech)
+str(frc_naive_pech)
+```
+
+```{r}
+# Extract the forecast values
+frc_AAA_pech_values <- as.numeric(frc_AAA_pech$mean)
+frc_mAdm_pech_values <- as.numeric(frc_mAdm_pech$mean)
+frc_mmm_pech_values <- as.numeric(frc_mmm_pech$mean)
+frc_mMdm_pech_values <- as.numeric(frc_mMdm_pech$mean)
+frc_naive_pech_values <- as.numeric(frc_naive_pech)
+frc5_pe_ch_values <- as.numeric(frc5_pe_ch)
+frc6_pe_ch_values <- as.numeric(frc6_pe_ch)
+frc7_pe_ch_values <- as.numeric(frc7_pe_ch)
+frc_lasso_pech_values <- as.numeric(frc_lasso_pech)
+frc_ridge_pech_values <- as.numeric(frc_ridge_pech)
+
+
+# Print the forecast values
+print(frc_AAA_pech_values)
+print(frc_mAdm_pech_values)
+print(frc_mmm_pech_values)
+print(frc_mMdm_pech_values)
+print(frc_naive_pech_values)
+print(frc5_pe_ch_values)
+print(frc6_pe_ch_values)
+print(frc7_pe_ch_values)
+print(frc_lasso_pech_values)
+print(frc_ridge_pech_values)
+```
+```{r}
+# Calculate MAPE for each model
+MAPE_ets_AAA <- mean(abs((data_pe_ch.tst - frc_AAA_pech_values) / data_pe_ch.tst) * 100, na.rm = TRUE)
+MAPE_ets_madm <- mean(abs((data_pe_ch.tst - frc_mAdm_pech_values) / data_pe_ch.tst) * 100, na.rm = TRUE)
+MAPE_ets_mmm <- mean(abs((data_pe_ch.tst - frc_mmm_pech_values) / data_pe_ch.tst) * 100, na.rm = TRUE)
+MAPE_ets_mmdm <- mean(abs((data_pe_ch.tst - frc_mMdm_pech_values) / data_pe_ch.tst) * 100, na.rm = TRUE)
+MAPE_ets_naive <- mean(abs((data_pe_ch.tst - frc_naive_pech_values) / data_pe_ch.tst) * 100, na.rm = TRUE)
+MAPE_ols_auto <- mean(abs((data_pe_ch.tst - frc5_pe_ch_values) / data_pe_ch.tst) * 100, na.rm = TRUE)
+MAPE_ols_dummies <- mean(abs((data_pe_ch.tst - frc6_pe_ch_values) / data_pe_ch.tst) * 100, na.rm = TRUE)
+MAPE_ols_diff <- mean(abs((data_pe_ch.tst - frc7_pe_ch_values) / data_pe_ch.tst) * 100, na.rm = TRUE)
+MAPE_lasso <- mean(abs((data_pe_ch.tst - frc_lasso_pech_values) / data_pe_ch.tst) * 100, na.rm = TRUE)
+MAPE_ridge <- mean(abs((data_pe_ch.tst - frc_ridge_pech_values) / data_pe_ch.tst) * 100, na.rm = TRUE)
+
+# Create a vector of MAPE values
+MAPE_values <- c(MAPE_ets_mnm, MAPE_ets_madm, MAPE_ets_mmm, MAPE_ets_mmdm, MAPE_ets_naive, MAPE_ols_auto, MAPE_ols_dummies, MAPE_ols_diff, MAPE_lasso, MAPE_ridge)
+
+# Create a vector of model names
+model_names <- c("ETS-AAA", "ETS-MAdM", "ETS-MMM", "ETS-MMdM", "ETS-Naive", "OLS-Auto", "OLS-Dummies", "OLS-Diff", "Lasso", "Ridge")
+
+# Combine the model names and MAPE values into a data frame
+mape_df <- data.frame(Model = model_names, MAPE = MAPE_values)
+
+# Print the MAPE values
+print(mape_df)
+
+```
+```{r}
+# Assuming MAE_df and MAPE_df have the same number of rows
+combined_df <- cbind(mae_table, mape_df)
+
+# Alternatively, using data.frame
+combined_df <- data.frame(mae_table, mape_df)
+combined_df
+```
+From the results, we can see that the ETS-AAA model performed best when compared to all other models.
+
+### Forecasting tourism flow from USA to Chile
+
+```{r}
+
+# Getting the values for the origin Chile.
+data_usa_ch <- data_ch[,5]
+print(data_usa_ch)
+```
+
+```{r}
+## #### Creating Train and Test Data
+# Taking year 2019 data as the test data
+data_usa_ch.tst <- window(data_usa_ch, frequency=4, start=c(2019, 1))
+print('Test Data')
+print(data_usa_ch.tst)
+
+# Rest of the data is taken as training data
+data_usa_ch.trn <- window(data_usa_ch, frequency=4, end=c(2018, 4))
+print('Training Data')
+print(data_usa_ch.trn)
+```
+```{r}
+#### Exploring the time series
+plot(data_usa_ch, ylab="Toursim flow from USA to Chile")
+```
+
+#Here, I am going to calculate Central Moving Average and plot it
+```{r}
+cma_usa_ch <- cmav(data_usa_ch.trn, outplot=1)
+title(main="Tourism flow from USA to Chile")
+
+```
+
+Now, I am going to plot the seasonal plot.
+```{r}
+
+# Plotting the seasonal plot
+seasplot(data_usa_ch.trn)
+
+# Plotting the seasonal boxplot
+seasplot(data_usa_ch.trn, outplot=2)
+
+# Plotting the seasonal subseries plot
+seasplot(data_usa_ch.trn,outplot=3)
+```
+Results of statistical testing
+Evidence of trend: TRUE  (pval: 0)
+Evidence of seasonality: TRUE  (pval: 0)
+
+
+
+From the plots, we can see model has both trend and multiplicative seasonality. Now, I am going to decompose the time series.
+```{r}
+# Decomposing the time series
+dc_usa_ch <- decomp(data_usa_ch.trn,outplot=1)
+
+```
+```{r}
+# Load necessary libraries
+library(ggplot2)
+
+# Apply additive decomposition
+decomp_additive <- decompose(data_usa_ch, type = "additive")
+
+# Apply multiplicative decomposition
+decomp_multiplicative <- decompose(data_usa_ch, type = "multiplicative")
+
+# Plot the decomposed components
+par(mfrow = c(3, 3))  # Set up a 3x3 grid for the plots
+
+# Original time series
+plot(data_usa_ch, main = "Original Time Series", col = "blue")
+
+# Additive decomposition components
+plot(decomp_additive$trend, main = "Additive Trend", col = "red")
+plot(decomp_additive$seasonal, main = "Additive Seasonal", col = "green")
+plot(decomp_additive$random, main = "Additive Residuals", col = "purple")
+
+# Multiplicative decomposition components
+plot(decomp_multiplicative$trend, main = "Multiplicative Trend", col = "red")
+plot(decomp_multiplicative$seasonal, main = "Multiplicative Seasonal", col = "green")
+plot(decomp_multiplicative$random, main = "Multiplicative Residuals", col = "purple")
+
+# Reset the plotting layout
+par(mfrow = c(1, 1))
+```
+
+#### Building the Model using Exponential Smoothing
+
+Initially, I am going to forecast the time series using information criteria without explicitly specifying ETS model.
+
+
+```{r}
+fit_usa_ch <- ets(data_usa_ch.trn)
+fit_usa_ch
+
+```
+Here, we can see ETS(M,A,M) is chosen as the best model. Now, I am going to construct the forecasting model by preselecting the exponential smoothing type. Since, there is trend and seasonality, I am going to build ETS(M,Ad,M), ETS(M,M,M) and ETS(M,Md,M)
+```{r}
+fit1_usa_ch <- ets(data_usa_ch.trn, model="MAM", damped=TRUE)
+fit2_usa_ch <- ets(data_usa_ch.trn, model="MMM", damped=FALSE)
+fit3_usa_ch <- ets(data_usa_ch.trn, model="MMM", damped=TRUE)
+```
+
+Now, I am going to get the ETS model with best AICc.
+```{r}
+aicc <- c(fit_usa_ch$aicc,fit1_usa_ch$aicc, fit2_usa_ch$aicc, fit3_usa_ch$aicc)
+names(aicc) <- c("MAM","MAdM","MMM","MMdM")
+aicc
+
+```
+```{r}
+
+which.min(aicc)
+```
+We can see that the first model where smoothing type is selected automatically gives the best AICc. Now, I am going to forecast these fours models and Naive model.
+#### Forecasting the time series
+
+Here, I am going to forecast the fours models we build and the Naive model. Since the test set is only for one year, I am going to do single origin evaluation.
+```{r}
+# Forecast period is defined as 4, since we are forecasting for the next 4 quarters of 2019
+h <- 4
+
+# Forcasting all the models
+frc_mam_usach <- forecast(fit_usa_ch, h=h)
+frc_mAdm_usach <- forecast(fit1_usa_ch, h=h)
+frc_mmm_usach <- forecast(fit2_usa_ch, h=h)
+frc_mMdm_usach <- forecast(fit3_usa_ch, h=h)
+
+# And the naive:
+frc_naive_usach <- tail(data_usa_ch.trn, frequency(data_usa_ch.trn))[1:h] # that is copy the last season
+
+```
+Now, I am plotting forecasts of all the models below.
+```{r}
+plot(frc_mam_usach)
+plot(frc_mAdm_usach)
+plot(frc_mmm_usach)
+plot(frc_mMdm_usach)
+plot(frc_naive_usach)
+
+```
+Now, I am going to evaluate the forecasts using Mean Absolute Error (MAE) and Mean Absolute Percentage Error (MAPE). Since our forecast horizon is 4, I am going to take first 4 observations from the test set.
+```{r}
+
+MAE_ets_MAM <- mean(abs(data_usa_ch.tst[1:h] - frc_mam_usach$mean))
+MAE_ets_MAdM <- mean(abs(data_usa_ch.tst[1:h] - frc_mAdm_usach$mean))
+MAE_ets_MMM <- mean(abs(data_usa_ch.tst[1:h] - frc_mmm_usach$mean))
+MAE_ets_MMdM <- mean(abs(data_usa_ch.tst[1:h] - frc_mMdm_usach$mean))
+MAE_ets_Naive <- mean(abs(data_usa_ch.tst[1:h] - frc_naive_usach))
+
+MAE_usa_ch <- c(MAE_ets_MNM, MAE_ets_MAdM, MAE_ets_MMM, MAE_ets_MMdM, MAE_ets_Naive) # Collect them in a single vector
+
+names(MAE_usa_ch) <- c("MAM","MAdM","MMM","MMdM","Naive")
+round(MAE_usa_ch, 3) # round to 3rd decimal point
+
+```
+```{r}
+which.min(MAE_usa_ch)
+```
+
+```{r}
+MAPE_ets_MAM <- mean(abs((data_usa_ch.tst[1:h] - frc_mam_usach$mean)/data_usa_ch.tst[1:h]))
+MAPE_ets_MAdm <- mean(abs((data_usa_ch.tst[1:h] - frc_mAdm_usach$mean)/data_usa_ch.tst[1:h]))
+MAPE_ets_MMM <- mean(abs((data_usa_ch.tst[1:h] - frc_mmm_usach$mean)/data_usa_ch.tst[1:h]))
+MAPE_ets_MMdM <- mean(abs((data_usa_ch.tst[1:h] - frc_mMdm_usach$mean)/data_usa_ch.tst[1:h]))
+MAPE_ets_Naive <- mean(abs((data_usa_ch.tst[1:h] - frc_naive_usach)/data_usa_ch.tst[1:h]))
+
+MAPE_usa_ch <- c(MAPE_ets_MNM, MAPE_ets_MAdm, MAPE_ets_MMM, MAPE_ets_MMdM, MAPE_ets_Naive) # Collect them in a single vector
+
+names(MAPE_usa_ch) <- c("MAM","MAdM","MMM","MMdM","Naive")
+round(MAPE_usa_ch, 3) # round to 3rd decimal point
+```
+
+```{r}
+which.min(MAPE_usa_ch)
+```
+According to MAE and MAPE, first model which uses MAM produces the best forecast with least error
+```{r}
+frc_ets_usa_ch <- frc_mam_usach$mean
+MAPE_ets_usa_ch <- MAPE_ets_MAM
+```
+#### Building the Model using OLS
+
+Initially, I am going to plot training data
+```{r}
+plot(data_usa_ch.trn)
+```
+```{r}
+decomposed <- decompose(data_usa_ch.trn)
+```
+```{r}
+
+plot(decomposed$seasonal, main = "Seasonal Component")
+```
+We can see that the data has multiplicative seasonality. It is not good for the regression modelling. So, I am going to convert the data in logarithms and do the regression.
+```{r}
+data_usa_ch.trn_log <- log(data_usa_ch.trn)
+plot(data_usa_ch.trn_log)
+
+```
+
+Now, the seasonality becomes additive. Now, I am going to build the OLS model using lags. So, I am going to find the lag-structure of the time series. I am doing this by using both PACF (Partial AutoCorrelation Function).
+```{r}
+pacf(log(data_usa_ch.trn_log))
+
+```
+#### According to PACF, we can see that the lags  2, 3 and 4 are significant which may be helpful inputs for a regression model. Now, I am going to construct lags. Initially, I am going to get total number of observations in the training set.
+```{r}
+n <- length(data_usa_ch.trn_log)
+n
+
+```
+
+### I am going to create regression with 7 lags. For this, I am going to create an array with NA (Non-Arithmetic) values having n rows and 8 columns. One column is for the target and all other 7 columns for the lags.
+```{r}
+X_usa_ch <- array(NA, c(n, 8))
+
+for (i in 1:8){
+X_usa_ch[i:n,i] <- log(data_usa_ch.trn_log)[1:(n-i+1)]
+}
+
+# Name the columns
+colnames(X_usa_ch) <- c("USA", paste0("lag",1:7))
+
+X_usa_ch[1:10,]
+```
+Now, I am getting the last 10 rows.
+```{r}
+X_usa_ch[(n-9):n,]
+
+```
+
+```{r}
+X_usa_ch <- as.data.frame(X_usa_ch)
+plot(X_usa_ch)
+```
+
+We can see from the scatter plot that it looks not linear. Now, I am going to do regression using the complete model and the stepwise selection.
+```{r}
+# The complete model
+summary(lm(USA ~., data=X_usa_ch))
+
+```
+## We can see only lag 1,3,4 and 5 looks significant. Now, I am going to do regression using stepwise. But, it will throw error because of the NA values. We have to resolve this issue before running the stepwise model.
+```{r}
+# Find NA in X
+idx <- is.na(X_usa_ch)
+# The result is logical TRUE/FALSE values
+idx[1:10,]
+
+```
+
+```{r}
+
+# Finding NA value count in each row.
+idx <- rowSums(idx)
+
+# Getting the row indexes which does not contains any NA values.
+idx <- idx == 0
+idx
+```
+
+
+Now, I am going to build the stepwise regression model after removing the redundant data.
+
+```{r}
+# The stepwise model
+fit_temp <- lm(USA~., data=X_usa_ch[idx,])
+
+fit5_usa_ch <- step(fit_temp)
+
+```
+
+```{r}
+# The stepwise model suggests lags 1, 3, 4, 5 and 7  as significant. Now, I am going to do forecasting the model using the test set. I am going to forecast for the period from t + 1 to t+4.
+frc5_usa_ch <- array(NA,c(4,1))
+for (i in 1:4){
+# For the Xnew we use the last 7 observations as before
+Xnew <- tail(data_usa_ch.trn, 7)
+# Add to that the forecasted values
+Xnew <- c(Xnew, frc5_usa_ch)
+
+# Take the relevant 7 values. The index i helps us to get the right ones
+Xnew <- Xnew[i:(6+i)]
+# If i = 1 then this becomes Xnew[1:7].
+# If i = 2 then this becomes Xnew[2:8] - just as the example above.
+# Reverse the order
+Xnew <- Xnew[7:1]
+# Make Xnew an array and name the inputs
+Xnew <- array(Xnew, c(1,7)) # c(1,7) are the dimensions of the array
+colnames(Xnew) <- paste0("lag",1:7) # I have already reversed the order
+# Convert to data.frame
+Xnew <- as.data.frame(Xnew)
+# Forecast
+frc5_usa_ch[i] <- predict(fit5_usa_ch, Xnew)
+}
+frc5_usa_ch
+
+```
+
+Now, I am going to forecast using dummy variables, since there is seasonality for the data.
+```{r}
+length(data_usa_ch.trn)/4
+
+```
+
+Since the training data has 21 years, I am creating dummy variables for 21 years for each quarters.
+```{r}
+D <- rep(1:4, 21) # Replicate 1:4 21 times
+D <- factor(D)
+factor(rep(c("Q1","Q2","Q3","Q4"), 21))
+
+```
+Now, I am going to bind the dummies with the lags in X.
+
+
+```{r}
+D <- rep(1:4, length.out = nrow(X_usa_ch))
+
+# Bind the dummies with the lags in X_ch_ar
+X2_usa_ch <- cbind(X_usa_ch, D)
+colnames(X2_usa_ch) <- c(colnames(X_usa_ch)[1:8], "D")
+X2_usa_ch
+```
+
+Now, I am going to build the regression using all the seven lags.
+```{r}
+summary(lm(USA ~.,data=X2_usa_ch))
+```
+
+## We can see  lag1, lag3,lag4 and lag5 have very low p-values , indicating that they are likely to be statistically significant.lag2, lag3, lag6, and lag7 have higher p-values, suggesting that their coefficients may not be significantly different from zero. Now, I am going to do regression using stepwise. But, it will throw error because of the NA values. We have to resolve this issue before running the stepwise model.
+```{r}
+# Find NA in X2
+idx <- is.na(X2_usa_ch)
+# The result is logical TRUE/FALSE values
+idx[1:10,]
+
+```
+```{r}
+# Finding NA value count in each row.
+idx <- rowSums(idx)
+
+# Getting the row indexes which does not contains any NA values.
+idx <- idx == 0
+idx
+```
+
+Now, I am going to build the stepwise regression model after removing the redundant data.
+# The stepwise model
+```{r}
+fit_temp <- lm(USA~., data=X2_usa_ch[idx,])
+
+fit6_usa_ch <- step(fit_temp)
+
+
+```
+We can see that the model got lag1, lag3, lag4, lag5, and lag7. Now, I am going to compare the AIC of this model with the Autoregressive OLS model we got before.
+```{r}
+c(AIC(fit5_usa_ch), AIC(fit6_usa_ch))
+
+```
+```{r}
+fit6_usa_ch
+```
+```{r}
+fit5_usa_ch
+```
+
+## We can see that both the model  performs same. Now, I am going to forecast the model using the out-sample data. I am going to forecast for the period from t + 1 to t+4.
+
+```{r}
+frc6_usa_ch <- numeric(4)  # Initialize the forecast vector
+
+for (i in 1:4) {
+  # For Xnew, use the last 7 observations as before
+  Xnew <- tail(data_usa_ch.trn, 7)
+  
+  # Take the relevant 7 values. The index i helps us to get the right ones
+  Xnew <- Xnew[i:(6 + i)]
+  
+  # Remove NAs from lag variables
+  Xnew <- na.omit(Xnew)
+  
+  # Reverse the order of Xnew to match the order of lag variables
+  Xnew <- rev(Xnew)
+  
+  # Make Xnew an array and name the inputs
+  Xnew <- array(Xnew, c(1, 7))
+  colnames(Xnew) <- paste0("lag", 1:7)
+  
+  # Create the value of the dummy
+  D <- i
+  Xnew <- cbind(Xnew, D)
+  
+  # Convert to data.frame
+  Xnew <- as.data.frame(Xnew)
+  
+  # Print Xnew to investigate
+  print(Xnew)
+  
+  # Forecast
+  frc6_usa_ch[i] <- predict(fit6_usa_ch, newdata = Xnew)
+}
+
+frc6_usa_ch
+
+
+```
+
+```{r}
+frc6_usa_ch <- numeric(4)  # Initialize the forecast vector
+
+for (i in 1:4) {
+  # For Xnew, use the last 7 observations as before
+  Xnew <- tail(data_usa_ch.trn, 7)
+  
+  # Take the relevant 7 values. The index i helps us to get the right ones
+  Xnew <- Xnew[i:(6 + i)]
+  
+  # Remove NAs from lag variables
+  Xnew <- na.omit(Xnew)
+  
+  # Reverse the order of Xnew to match the order of lag variables
+  Xnew <- rev(Xnew)
+  
+  # Make Xnew an array and name the inputs
+  Xnew <- array(Xnew, c(1, 7))
+  colnames(Xnew) <- paste0("lag", 1:7)
+  
+  # Create the value of the dummy
+  D <- i
+  Xnew <- cbind(Xnew, D)
+  
+  # Convert to data.frame
+  Xnew <- as.data.frame(Xnew)
+  
+  # Print Xnew to investigate
+  print(Xnew)
+  
+  # Forecast
+  frc6_usa_ch[i] <- predict(fit6_usa_ch, newdata = Xnew)
+}
+
+frc6_usa_ch
+
+```
+
+Now, I am going to model in differences. Initially, I am going to retain the data without lags
+```{r}
+X3_usa_ch <- X_usa_ch
+```
+
+Now, I am going to calculate differences for each column.
+```{r}
+# The function ncol() counts how many columns
+for (i in 1:ncol(X3_usa_ch)){
+X3_usa_ch[,i] <- c(NA,diff(X3_usa_ch[,i]))
+}
+
+print(X3_usa_ch)
+```
+
+Now, I am going to build the regression using all the 7 lags
+```{r}
+summary(lm(USA ~., data=X3_usa_ch))
+
+```
+
+We can see that only lag 1,2 and 4 looks significant. Now, I am going to do stepwise regression model. But, it will throw error because of the NA values. We have to resolve this issue before running the stepwise model.
+```{r}
+idx <- is.na(X3_usa_ch)
+idx[1:10,]
+
+```
+
+
+```{r}
+# Finding NA value count in each row.
+idx <- rowSums(idx)
+
+# Getting the row indexes which does not contains any NA values.
+idx <- idx == 0
+idx
+```
+
+Now, I am going to build the stepwise regression model after removing the redundant data.
+```{r}
+# The stepwise model
+fit_temp <- lm(USA~., data=X3_usa_ch[idx,])
+
+fit7_usa_ch <- step(fit_temp)
+```
+
+We can see that the model got the lags 1,2,3,4 and lag7. We cannot use AIC here, since AIC cannot be applicable to the differenced data. Now, I am going to produce the forecasts.
+```{r}
+frc7_usa_ch <- array(NA,c(4,1))
+for (i in 1:4){
+# Calculate the differences of the in-sample data
+data_usa_ch.diff <- diff(data_usa_ch.trn)
+# Create lags - same as before
+Xnew <- tail(data_usa_ch.diff, 7)
+Xnew <- c(Xnew, frc7_usa_ch)
+Xnew <- Xnew[i:(6+i)]
+Xnew <- Xnew[7:1]
+Xnew <- array(Xnew, c(1,7))
+colnames(Xnew) <- paste0("lag",1:7)
+Xnew <- as.data.frame(Xnew)
+# Forecast
+frc7_usa_ch[i] <- predict(fit7_usa_ch, Xnew)
+}
+
+frc7_usa_ch
+
+```
+
+The forecast we got are in differences. To compare with other models, I am going to reverse the differences.
+```{r}
+frc7_usa_ch <- cumsum(c(tail(data_usa_ch.trn, 1), frc7_usa_ch))
+frc7_usa_ch <- frc7_usa_ch[-1]
+frc7_usa_ch
+
+```
+
+Now, I am going to build and forecast lasso regression
+```{r}
+# I remove the first 7 rows by that contain NAs
+# For the explanatories I remove the first column
+
+xx_usa_ch <- as.matrix(X_usa_ch[-(1:7),-1])
+# For the target I retain only the first column
+yy_usa_ch <- as.matrix(X_usa_ch[-(1:7),1])
+
+fit8_usa_ch <- cv.glmnet(x=xx_usa_ch, y=yy_usa_ch)
+```
+
+
+
+```{r}
+frc_lasso_usach <- array(NA,c(4,1))
+for (i in 1:4){
+# Create inputs - note for lasso we do not transform these into data.frame
+Xnew <- c(tail(data_usa_ch.trn,7), frc_lasso_usach)
+Xnew <- (Xnew[i:(6+i)])[7:1]
+Xnew <- array(Xnew, c(1,7))
+colnames(Xnew) <- paste0("lag",1:7)
+
+# Forecast
+frc_lasso_usach[i] <- predict(fit8_usa_ch, Xnew)
+}
+
+frc_lasso_usach
+```
+Now, I am going to build and forecast ridge regression
+```{r}
+fit_ridge_usach <- cv.glmnet(x=xx_usa_ch, y=yy_usa_ch, alpha=0)
+
+```
+
+```{r}
+frc_ridge_usach <- array(NA,c(4,1))
+for (i in 1:4){
+# Create inputs - note for lasso we do not transform these into data.frame
+Xnew <- c(tail(data_usa_ch.trn,7), frc_ridge_usach)
+Xnew <- (Xnew[i:(6+i)])[7:1]
+Xnew <- array(Xnew, c(1,7))
+colnames(Xnew) <- paste0("lag",1:7)
+
+# Forecast
+frc_ridge_usach[i] <- predict(fit_ridge_usach, Xnew)
+}
+
+frc_ridge_usach
+```
+
+
+Now, I am going to plot all the five models.
+```{r}
+frc_ets_usa_ch <- ts(frc_ets_usa_ch, frequency=frequency(data_usa_ch.tst), start=start(data_usa_ch.tst))
+frc5_usa_ch <- ts(frc5_usa_ch, frequency=frequency(data_usa_ch.tst), start=start(data_usa_ch.tst))
+frc6_usa_ch <- ts(frc6_usa_ch, frequency=frequency(data_usa_ch.tst), start=start(data_usa_ch.tst))
+frc7_usa_ch <- ts(frc7_usa_ch, frequency=frequency(data_usa_ch.tst), start=start(data_usa_ch.tst))
+frc_lasso_usach <- ts(frc_lasso_usach, frequency=frequency(data_usa_ch.tst), start=start(data_usa_ch.tst))
+frc_ridge_usach <- ts(frc_ridge_usach, frequency=frequency(data_usa_ch.tst), start=start(data_usa_ch.tst))
+ts.plot(data_usa_ch.trn, data_usa_ch.tst, frc_ets_usa_ch, frc5_usa_ch, frc6_usa_ch, frc7_usa_ch, frc_lasso_usach, frc_ridge_usach, col=c("black","black","orange","red","blue","green","yellow","brown"))
+legend("topleft",c("ETS-best", "OLS-Auto","OLS-Dummies","OLS-Difference","Lasso","Ridge"),col=c("orange","red","blue","green","yellow","brown"),lty=1)
+title("Toursim flow from USA to Chile")
+
+```
+
+
+```{r}
+# Create a data frame with model names and forecast values
+forecast_table <- data.frame(
+  Model = c("ETS", "Autoregressive", "Dummies", "Difference", "Lasso", "Ridge"),
+  Qtr1 = c(frc_ets_usa_ch[1], frc5_usa_ch[1], frc6_usa_ch[1], frc7_usa_ch[1], frc_lasso_usach[1], frc_ridge_usach[1]),
+  Qtr2 = c(frc_ets_usa_ch[2], frc5_usa_ch[2], frc6_usa_ch[2], frc7_usa_ch[2], frc_lasso_usach[2], frc_ridge_usach[2]),
+  Qtr3 = c(frc_ets_usa_ch[3], frc5_usa_ch[3], frc6_usa_ch[3], frc7_usa_ch[3], frc_lasso_usach[3], frc_ridge_usach[3]),
+  Qtr4 = c(frc_ets_usa_ch[4], frc5_usa_ch[4], frc6_usa_ch[4], frc7_usa_ch[4], frc_lasso_usach[4], frc_ridge_usach[4])
+)
+
+# Print the forecast table
+print(forecast_table)
+
+```
+Now, I am going to evaluate all the OLS models together with the ETS models using Mean Absolute Error (MAE) and Mean Absolute Percentage Error (MAPE).
+```{r}
+
+
+# Calculate Mean Absolute Error (MAE) for each model
+MAE_ets_MAM <- mean(abs(data_usa_ch.tst[1:h] - frc_mam_usach$mean))
+MAE_ets_MAdM <- mean(abs(data_usa_ch.tst[1:h] - frc_mAdm_usach$mean))
+MAE_ets_MMM <- mean(abs(data_usa_ch.tst[1:h] - frc_mmm_usach$mean))
+MAE_ets_MMdM <- mean(abs(data_usa_ch.tst[1:h] - frc_mMdm_usach$mean))
+MAE_ets_Naive <- mean(abs(data_usa_ch.tst[1:h] - frc_naive_usach))
+
+
+mae_ets <- mean(abs(data_usa_ch.tst - frc_ets_usa_ch))
+mae_autoregressive <- mean(abs(data_usa_ch.tst - frc5_usa_ch))
+mae_dummies <- mean(abs(data_usa_ch.tst - frc6_usa_ch))
+mae_difference <- mean(abs(data_usa_ch.tst - frc7_usa_ch))
+mae_lasso <- mean(abs(data_usa_ch.tst - frc_lasso_usach))
+mae_ridge <- mean(abs(data_usa_ch.tst - frc_ridge_usach))
+
+# Create a data frame for comparison
+mae_table <- data.frame(
+  Model = c("ETS-MAM", "ETS-MAdM", "ETS-MMM", "ETS-MMdM", "ETS-Naive", "OLS-Auto", "OLS-Dummies", "OLS-Difference", "Lasso", "Ridge"),
+  MAE = c(MAE_ets_MNM,MAE_ets_MAdM,MAE_ets_MMM,MAE_ets_MMdM,MAE_ets_Naive, mae_autoregressive, mae_dummies, mae_difference, mae_lasso, mae_ridge)
+)
+
+# Print the MAE comparison table
+print(mae_table)
+
+```
+
+```{r}
+class(data_usa_ch.tst)
+class(frc_mam_usach)
+str(frc_naive_usach)
+```
+
+```{r}
+# Extract the forecast values
+frc_mam_usach_values <- as.numeric(frc_mam_usach$mean)
+frc_mAdm_usach_values <- as.numeric(frc_mAdm_usach$mean)
+frc_mmm_usach_values <- as.numeric(frc_mmm_usach$mean)
+frc_mMdm_usach_values <- as.numeric(frc_mMdm_usach$mean)
+frc_naive_usach_values <- as.numeric(frc_naive_usach)
+frc5_usa_ch_values <- as.numeric(frc5_usa_ch)
+frc6_usa_ch_values <- as.numeric(frc6_usa_ch)
+frc7_usa_ch_values <- as.numeric(frc7_usa_ch)
+frc_lasso_usach_values <- as.numeric(frc_lasso_usach)
+frc_ridge_usach_values <- as.numeric(frc_ridge_usach)
+
+
+# Print the forecast values
+print(frc_mam_usach_values)
+print(frc_mAdm_usach_values)
+print(frc_mmm_usach_values)
+print(frc_mMdm_usach_values)
+print(frc_naive_usach_values)
+print(frc5_usa_ch_values)
+print(frc6_usa_ch_values)
+print(frc7_usa_ch_values)
+print(frc_lasso_usach_values)
+print(frc_ridge_usach_values)
+```
+```{r}
+# Calculate MAPE for each model
+MAPE_ets_mam <- mean(abs((data_usa_ch.tst - frc_mam_usach_values) / data_usa_ch.tst) * 100, na.rm = TRUE)
+MAPE_ets_madm <- mean(abs((data_usa_ch.tst - frc_mAdm_usach_values) / data_usa_ch.tst) * 100, na.rm = TRUE)
+MAPE_ets_mmm <- mean(abs((data_usa_ch.tst - frc_mmm_usach_values) / data_usa_ch.tst) * 100, na.rm = TRUE)
+MAPE_ets_mmdm <- mean(abs((data_usa_ch.tst - frc_mMdm_usach_values) / data_usa_ch.tst) * 100, na.rm = TRUE)
+MAPE_ets_naive <- mean(abs((data_usa_ch.tst - frc_naive_usach_values) / data_usa_ch.tst) * 100, na.rm = TRUE)
+MAPE_ols_auto <- mean(abs((data_usa_ch.tst - frc5_usa_ch_values) / data_usa_ch.tst) * 100, na.rm = TRUE)
+MAPE_ols_dummies <- mean(abs((data_usa_ch.tst - frc6_usa_ch_values) / data_usa_ch.tst) * 100, na.rm = TRUE)
+MAPE_ols_diff <- mean(abs((data_usa_ch.tst - frc7_usa_ch_values) / data_usa_ch.tst) * 100, na.rm = TRUE)
+MAPE_lasso <- mean(abs((data_usa_ch.tst - frc_lasso_usach_values) / data_usa_ch.tst) * 100, na.rm = TRUE)
+MAPE_ridge <- mean(abs((data_usa_ch.tst - frc_ridge_usach_values) / data_usa_ch.tst) * 100, na.rm = TRUE)
+
+# Create a vector of MAPE values
+MAPE_values <- c(MAPE_ets_mam, MAPE_ets_madm, MAPE_ets_mmm, MAPE_ets_mmdm, MAPE_ets_naive, MAPE_ols_auto, MAPE_ols_dummies, MAPE_ols_diff, MAPE_lasso, MAPE_ridge)
+
+# Create a vector of model names
+model_names <- c("ETS-MAM", "ETS-MAdM", "ETS-MMM", "ETS-MMdM", "ETS-Naive", "OLS-Auto", "OLS-Dummies", "OLS-Diff", "Lasso", "Ridge")
+
+# Combine the model names and MAPE values into a data frame
+mape_df <- data.frame(Model = model_names, MAPE = MAPE_values)
+
+# Print the MAPE values
+print(mape_df)
+
+```
+```{r}
+# Assuming MAE_df and MAPE_df have the same number of rows
+combined_df <- cbind(mae_table, mape_df)
+
+# Alternatively, using data.frame
+combined_df <- data.frame(mae_table, mape_df)
+combined_df
+```
+From the results, we can see that the ETS-MAM model performed best when compared to all other models.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
